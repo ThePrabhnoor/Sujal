@@ -1,0 +1,142 @@
+# ==============================================================================
+# BlueSentinel_CBS - Centralized Git Ignore Configuration
+# ==============================================================================
+# Single repository-wide ignore file covering all subsystems:
+# Embedded ESP32 Firmware, KiCad EDA, Backend, Dashboard, Testing, OS, and Secrets.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. Operating System Artifacts
+# ------------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Icon
+Icon?
+Icon\r
+
+# ------------------------------------------------------------------------------
+# 2. Hardware Design & EDA (KiCad 7/8/9+)
+# ------------------------------------------------------------------------------
+# KiCad automatic local history directories (contain internal git snapshot repos)
+**/.history/
+# Runtime file locks
+*.lck
+~*.lck
+# Backup and auto-recovery files
+*.bak
+*-bak
+*.kicad_pcb-bak
+*.kicad_sch-bak
+_autosave-*
+*.tmp
+# Local component and footprint caches
+fp-info-cache
+# DRC/ERC diagnostic reports and temporary netlists
+*.rpt
+*.drc
+*.net
+
+# ------------------------------------------------------------------------------
+# 3. Embedded Firmware (ESP32, PlatformIO, ESP-IDF, Arduino)
+# ------------------------------------------------------------------------------
+# PlatformIO build directories and local dependencies
+.pio/
+.pioenvs/
+.piolibdeps/
+# Espressif ESP-IDF build outputs and configuration caches
+.espressif/
+build/
+sdkconfig.old
+# Binary artifacts and object files
+*.bin
+*.elf
+*.hex
+*.map
+*.o
+*.obj
+*.a
+*.eep
+*.lss
+*.sym
+# CMake caches and build directories
+CMakeCache.txt
+CMakeFiles/
+cmake-build-*/
+
+# ------------------------------------------------------------------------------
+# 4. Telemetry Backend & APIs (Python, Node.js, Go)
+# ------------------------------------------------------------------------------
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+eggs/
+# Node.js / JavaScript / TypeScript
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-store/
+# Local database files
+*.sqlite
+*.sqlite3
+*.db
+# Local Docker Compose overrides
+docker-compose.override.yml
+
+# ------------------------------------------------------------------------------
+# 5. Monitoring Dashboard (Web, Vite, Next.js, Mobile)
+# ------------------------------------------------------------------------------
+.next/
+out/
+.parcel-cache/
+.turbo/
+
+# ------------------------------------------------------------------------------
+# 6. Testing, Code Quality & Coverage
+# ------------------------------------------------------------------------------
+.pytest_cache/
+.coverage
+htmlcov/
+coverage/
+.nyc_output/
+*.log
+
+# ------------------------------------------------------------------------------
+# 7. Editor, Tooling & IDE Configurations
+# ------------------------------------------------------------------------------
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/c_cpp_properties.json
+.idea/
+*.swp
+*.swo
+*~
+
+# ------------------------------------------------------------------------------
+# 8. Security & Secret Protection
+# ------------------------------------------------------------------------------
+# Never commit environment variable files or cryptographic keys
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
+credentials.json
+secrets.h
+wifi_credentials.h
