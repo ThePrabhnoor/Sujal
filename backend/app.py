@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import csv
+import json
 import os
+from io import StringIO
 from datetime import datetime, timezone
 from functools import wraps
 from typing import Any
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
-from pymongo import DESCENDING, MongoClient
-from pymongo.errors import PyMongoError
+from pymongo import ASCENDING, DESCENDING, MongoClient, ReturnDocument
+from pymongo.errors import DuplicateKeyError, PyMongoError
 from rules import evaluate_reading
 
 load_dotenv()
@@ -45,7 +48,7 @@ def finite_number(value: Any, field: str) -> float:
     return number
 
 
-def validate_reading(payload: Any) -> dict[str, Any]:
+def validate_reading(payload: Any, idempotency_key: str | None = None) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("request body must be a JSON object")
     node_id = payload.get("node_id")
@@ -87,15 +90,9 @@ def validate_reading(payload: Any) -> dict[str, Any]:
     if branch is not None and branch not in ("A", "B", "none"):
         raise ValueError("active_branch must be A, B, or none")
 
-    run_id = payload.get("run_id")
-    phase = payload.get("phase")
-    if (run_id is None) != (phase is None):
-        raise ValueError("run_id and phase must be provided together")
-    if run_id is not None:
-        if not isinstance(run_id, str) or not run_id.strip():
-            raise ValueError("run_id must be a non-empty string")
-        if phase not in ("inlet", "outlet"):
-            raise ValueError("phase must be inlet or outlet")
+    event_id = payload.get("event_id") or idempotency_key
+    if not isinstance(event_id, str) or not event_id.strip() or len(event_id.strip()) > 128:
+        raise ValueError("event_id is required (or send it in the Idempotency-Key header) and must be 1..128 characters")
 
     device_status = payload.get("device_status", {})
     if not isinstance(device_status, dict):
@@ -103,8 +100,7 @@ def validate_reading(payload: Any) -> dict[str, Any]:
 
     return {
         "node_id": node_id.strip(),
-        "run_id": run_id.strip() if isinstance(run_id, str) else None,
-        "phase": phase,
+        "event_id": event_id.strip(),
         "recorded_at": parse_timestamp(payload.get("timestamp")),
         "received_at": utc_now(),
         "measurements": cleaned,
@@ -125,6 +121,20 @@ def create_app() -> Flask:
     database = mongo_client[database_name] if mongo_client is not None else None
     app.extensions["mongo_client"] = mongo_client
     app.extensions["sujal_db"] = database
+    if database is not None:
+        try:
+            database.readings.create_index(
+                [("node_id", ASCENDING), ("event_id", ASCENDING)],
+                unique=True,
+                partialFilterExpression={"event_id": {"$type": "string"}},
+                name="unique_node_event_id",
+            )
+            database.readings.create_index(
+                [("node_id", ASCENDING), ("recorded_at", DESCENDING)],
+                name="readings_by_node_time",
+            )
+        except PyMongoError:
+            app.logger.exception("Could not ensure MongoDB reading indexes")
 
     def db_or_error():
         if database is None:
@@ -139,6 +149,38 @@ def create_app() -> Flask:
                 return jsonify(error="unauthorized device"), 401
             return handler(*args, **kwargs)
         return wrapped
+
+    def read_operating_thresholds() -> dict[str, float | int | None]:
+        def optional_float(name: str, default: float | None = None) -> float | None:
+            raw = os.getenv(name, "" if default is None else str(default)).strip()
+            if not raw:
+                return default
+            value = float(raw)
+            if value != value or value in (float("inf"), float("-inf")):
+                raise ValueError(f"{name} must be a finite number")
+            return value
+
+        thresholds: dict[str, float | int | None] = {
+            "turbidity_limit_ntu": optional_float("TURBIDITY_OPERATING_LIMIT_NTU", 5.0),
+            "active_flow_min_lpm": optional_float("ACTIVE_FLOW_MIN_LPM"),
+            "ph_min": optional_float("PH_MIN_OPERATING", 6.5),
+            "ph_max": optional_float("PH_MAX_OPERATING", 8.5),
+            "temperature_min_c": optional_float("TEMP_MIN_OPERATING_C", 5.0),
+            "temperature_max_c": optional_float("TEMP_MAX_OPERATING_C", 40.0),
+            "mq5_adc_alert_threshold": optional_float("MQ5_ADC_ALERT_THRESHOLD"),
+        }
+        if thresholds["ph_min"] is not None and thresholds["ph_max"] is not None and thresholds["ph_min"] >= thresholds["ph_max"]:
+            raise ValueError("PH_MIN_OPERATING must be less than PH_MAX_OPERATING")
+        if thresholds["temperature_min_c"] is not None and thresholds["temperature_max_c"] is not None and thresholds["temperature_min_c"] >= thresholds["temperature_max_c"]:
+            raise ValueError("TEMP_MIN_OPERATING_C must be less than TEMP_MAX_OPERATING_C")
+        digital_alarm = os.getenv("MQ5_DIGITAL_ALARM_VALUE", "").strip()
+        if digital_alarm:
+            if digital_alarm not in ("0", "1"):
+                raise ValueError("MQ5_DIGITAL_ALARM_VALUE must be blank, 0, or 1")
+            thresholds["mq5_digital_alarm_value"] = int(digital_alarm)
+        else:
+            thresholds["mq5_digital_alarm_value"] = None
+        return thresholds
 
     @app.get("/api/health")
     def health():
@@ -244,38 +286,105 @@ def create_app() -> Flask:
     @require_device_token
     def ingest_reading():
         try:
-            record = validate_reading(request.get_json(silent=True))
+            record = validate_reading(request.get_json(silent=True), request.headers.get("Idempotency-Key"))
         except ValueError as exc:
             return jsonify(error=str(exc)), 400
+        try:
+            thresholds = read_operating_thresholds()
+        except ValueError as exc:
+            app.logger.error("Invalid operating-threshold configuration: %s", exc)
+            return jsonify(error="invalid backend threshold configuration", detail=str(exc)), 500
         database, error = db_or_error()
         if error:
             return error
         try:
-            result = database.readings.insert_one(record)
-            record["_id"] = result.inserted_id
-            turbidity_limit = os.getenv("TURBIDITY_OPERATING_LIMIT_NTU", "5.0").strip()
-            flow_min = os.getenv("ACTIVE_FLOW_MIN_LPM", "").strip()
-            try:
-                turbidity_limit_value = float(turbidity_limit) if turbidity_limit else None
-                flow_min_value = float(flow_min) if flow_min else None
-            except ValueError:
-                app.logger.error("Invalid operational threshold in environment configuration")
-                return jsonify(error="invalid backend threshold configuration"), 500
-
-            generated_alerts = evaluate_reading(record, turbidity_limit_value, flow_min_value)
+            existing = None
+            with mongo_client.start_session() as session:
+                with session.start_transaction():
+                    existing = database.readings.find_one(
+                        {"node_id": record["node_id"], "event_id": record["event_id"]},
+                        session=session,
+                    )
+                    if existing is None:
+                        state = database.nodes.find_one({"node_id": record["node_id"]}, session=session)
+                        if state is None or "sample_sequence" not in state:
+                            previous_count = database.readings.count_documents(
+                                {"node_id": record["node_id"]}, session=session
+                            )
+                            database.nodes.update_one(
+                                {"node_id": record["node_id"]},
+                                {"$set": {"sample_sequence": previous_count}},
+                                upsert=True,
+                                session=session,
+                            )
+                        state = database.nodes.find_one_and_update(
+                            {"node_id": record["node_id"]},
+                            {"$inc": {"sample_sequence": 1}},
+                            return_document=ReturnDocument.AFTER,
+                            session=session,
+                        )
+                        sequence = int(state["sample_sequence"])
+                        record["sample_sequence"] = sequence
+                        record["phase"] = "inlet" if sequence % 2 == 1 else "outlet"
+                        record["run_id"] = f'{record["node_id"]}-PAIR-{(sequence + 1) // 2:06d}'
+                        result = database.readings.insert_one(record, session=session)
+                        record["_id"] = result.inserted_id
+            if existing is not None:
+                return jsonify(
+                    ok=True, duplicate=True, reading_id=str(existing["_id"]),
+                    node_id=record["node_id"], run_id=existing.get("run_id"),
+                    phase=existing.get("phase"), timestamp=existing["recorded_at"].isoformat(),
+                ), 200
+            generated_alerts = evaluate_reading(record, thresholds)
+            alert_ids = []
             for alert in generated_alerts:
                 # Keep one open alert per node and rule; repeated packets refresh it
                 # instead of filling the queue with duplicates.
                 initial_alert = {key: value for key, value in alert.items() if key not in {"message", "phase"}}
                 initial_alert.update({"created_at": record["received_at"], "first_reading_id": str(result.inserted_id)})
-                database.alerts.update_one(
+                update_result = database.alerts.update_one(
                     {"node_id": alert["node_id"], "code": alert["code"], "status": "open"},
                     {"$set": {"message": alert["message"], "last_seen_at": record["received_at"], "latest_reading_id": str(result.inserted_id), "phase": alert.get("phase")},
                      "$setOnInsert": initial_alert,
                      "$inc": {"occurrences": 1}},
                     upsert=True,
                 )
-            return jsonify(ok=True, id=str(result.inserted_id), node_id=record["node_id"], timestamp=record["recorded_at"].isoformat(), alerts_generated=len(generated_alerts)), 201
+                if update_result.upserted_id is not None:
+                    alert_ids.append(str(update_result.upserted_id))
+                else:
+                    current_alert = database.alerts.find_one(
+                        {"node_id": alert["node_id"], "code": alert["code"], "status": "open"},
+                        {"_id": 1},
+                    )
+                    if current_alert:
+                        alert_ids.append(str(current_alert["_id"]))
+
+            control_recommendation = None
+            if "low_active_branch_flow" in {alert["code"] for alert in generated_alerts}:
+                active_branch = record["active_branch"]
+                control_recommendation = {
+                    "action": "failover_branch",
+                    "close_branch": active_branch,
+                    "open_branch": "B" if active_branch == "A" else "A",
+                    "reason": "active branch flow is below ACTIVE_FLOW_MIN_LPM",
+                    "execution": "ESP32 must verify and actuate locally; this API does not operate valves",
+                }
+            response_data = {
+                "ok": True, "duplicate": False, "reading_id": str(result.inserted_id),
+                "node_id": record["node_id"], "run_id": record.get("run_id"),
+                "phase": record.get("phase"), "timestamp": record["recorded_at"].isoformat(),
+                "alerts_generated": len(generated_alerts), "alert_ids": alert_ids,
+            }
+            if control_recommendation:
+                response_data["control_recommendation"] = control_recommendation
+            return jsonify(response_data), 201
+        except DuplicateKeyError:
+            # Covers two identical retries arriving at the same time.
+            existing = database.readings.find_one({"node_id": record["node_id"], "event_id": record["event_id"]})
+            if existing is not None:
+                return jsonify(ok=True, duplicate=True, reading_id=str(existing["_id"]), node_id=record["node_id"], run_id=existing.get("run_id"), phase=existing.get("phase")), 200
+            app.logger.exception("Duplicate event id encountered but original record was not found")
+            return jsonify(error="duplicate event id could not be resolved"), 503
         except PyMongoError:
             app.logger.exception("Failed to save telemetry")
             return jsonify(error="failed to save reading"), 503
@@ -319,6 +428,99 @@ def create_app() -> Flask:
         except PyMongoError:
             app.logger.exception("Failed to fetch telemetry history")
             return jsonify(error="failed to fetch readings"), 503
+
+    @app.get("/api/v1/nodes/<node_id>/archives")
+    def list_monthly_archives(node_id: str):
+        """List UTC months that contain saved readings for this node."""
+        database, error = db_or_error()
+        if error:
+            return error
+        try:
+            months = list(database.readings.aggregate([
+                {"$match": {"node_id": node_id}},
+                {"$group": {
+                    "_id": {"$dateToString": {
+                        "format": "%Y-%m", "date": "$recorded_at", "timezone": "UTC"
+                    }},
+                    "readings_count": {"$sum": 1},
+                    "first_reading_at": {"$min": "$recorded_at"},
+                    "last_reading_at": {"$max": "$recorded_at"},
+                }},
+                {"$sort": {"_id": -1}},
+                {"$limit": 120},
+            ]))
+            archives = [{
+                "month": item["_id"],
+                "readings_count": item["readings_count"],
+                "first_reading_at": item["first_reading_at"].replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
+                "last_reading_at": item["last_reading_at"].replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
+            } for item in months]
+            return jsonify(node_id=node_id, count=len(archives), archives=archives)
+        except PyMongoError:
+            app.logger.exception("Failed to list monthly archives")
+            return jsonify(error="failed to list archives"), 503
+
+    @app.get("/api/v1/nodes/<node_id>/archives/<month>.csv")
+    def download_monthly_archive(node_id: str, month: str):
+        """Create a CSV download for one UTC month from canonical MongoDB records."""
+        try:
+            month_start = datetime.strptime(month, "%Y-%m").replace(tzinfo=timezone.utc)
+            if month_start.strftime("%Y-%m") != month:
+                raise ValueError
+        except ValueError:
+            return jsonify(error="month must use YYYY-MM format"), 400
+        next_month = month_start.replace(
+            year=month_start.year + (1 if month_start.month == 12 else 0),
+            month=1 if month_start.month == 12 else month_start.month + 1,
+        )
+        database, error = db_or_error()
+        if error:
+            return error
+        try:
+            cursor = database.readings.find({
+                "node_id": node_id,
+                "recorded_at": {"$gte": month_start, "$lt": next_month},
+            }).sort("recorded_at", 1)
+            output = StringIO(newline="")
+            writer = csv.writer(output)
+            writer.writerow([
+                "reading_id", "node_id", "timestamp_utc", "received_at_utc",
+                "run_id", "phase", "active_branch", "ph", "turbidity_ntu",
+                "temperature_c", "mq5_adc", "mq5_digital", "flow_lpm_json",
+                "device_status_json", "source",
+            ])
+            count = 0
+            for record in cursor:
+                measurements = record.get("measurements", {})
+                recorded_at = record.get("recorded_at")
+                received_at = record.get("received_at")
+                if recorded_at and recorded_at.tzinfo is None:
+                    recorded_at = recorded_at.replace(tzinfo=timezone.utc)
+                if received_at and received_at.tzinfo is None:
+                    received_at = received_at.replace(tzinfo=timezone.utc)
+                writer.writerow([
+                    str(record.get("_id", "")), record.get("node_id", ""),
+                    recorded_at.isoformat().replace("+00:00", "Z") if recorded_at else "",
+                    received_at.isoformat().replace("+00:00", "Z") if received_at else "",
+                    record.get("run_id") or "", record.get("phase") or "",
+                    record.get("active_branch") or "", measurements.get("ph", ""),
+                    measurements.get("turbidity_ntu", ""), measurements.get("temperature_c", ""),
+                    measurements.get("mq5_adc", ""), measurements.get("mq5_digital", ""),
+                    json.dumps(measurements.get("flow_lpm", {}), separators=(",", ":")),
+                    json.dumps(record.get("device_status", {}), separators=(",", ":")),
+                    record.get("source", ""),
+                ])
+                count += 1
+            if count == 0:
+                return jsonify(error="no readings found for this node and month", node_id=node_id, month=month), 404
+            filename_node = "".join(char if char.isalnum() or char in "-_" else "_" for char in node_id)
+            response = Response("\ufeff" + output.getvalue(), mimetype="text/csv; charset=utf-8")
+            response.headers["Content-Disposition"] = f'attachment; filename="{filename_node}_{month}.csv"'
+            response.headers["X-Archive-Reading-Count"] = str(count)
+            return response
+        except PyMongoError:
+            app.logger.exception("Failed to generate monthly CSV archive")
+            return jsonify(error="failed to generate archive"), 503
 
     @app.get("/api/v1/nodes/<node_id>/runs/<run_id>/comparison")
     def compare_run(node_id: str, run_id: str):
@@ -441,17 +643,35 @@ def create_app() -> Flask:
             ).sort("received_at", 1))
             if not records:
                 return jsonify(node_id=node_id, status="stale", completeness_pct=0, expected_interval_seconds=interval_seconds, received_packets=0, expected_packets=0)
-            first_received_at = records[0]["received_at"]
-            # PyMongo returns BSON dates as naive UTC datetimes by default.
-            # Attach UTC before comparing with our timezone-aware `now` value.
-            if first_received_at.tzinfo is None:
-                first_received_at = first_received_at.replace(tzinfo=timezone.utc)
-            elapsed = min(3600, max(interval_seconds, (now - first_received_at).total_seconds()))
-            expected_packets = max(1, int(elapsed // interval_seconds))
-            received_packets = len(records)
-            completeness = round(min(100.0, received_packets / expected_packets * 100), 1)
-            status = "good" if completeness >= 95 else "intermittent" if completeness >= 80 else "poor"
-            return jsonify(node_id=node_id, status=status, completeness_pct=completeness, expected_interval_seconds=interval_seconds, received_packets=received_packets, expected_packets=expected_packets, window_seconds=int(elapsed))
+            # Count one packet per expected interval so retries/bursts cannot inflate the score.
+            times = []
+            for record in records:
+                received_at = record["received_at"]
+                if received_at.tzinfo is None:
+                    received_at = received_at.replace(tzinfo=timezone.utc)
+                times.append(received_at)
+            first_received_at, last_received_at = times[0], times[-1]
+            now_epoch = now.timestamp()
+            elapsed = min(3600.0, max(0.0, now_epoch - first_received_at.timestamp()))
+            expected_packets = max(1, int(elapsed // interval_seconds) + 1)
+            interval_slots = {
+                int((received_at.timestamp() - first_received_at.timestamp()) // interval_seconds)
+                for received_at in times
+            }
+            received_packets = min(len(interval_slots), expected_packets)
+            completeness = round(received_packets / expected_packets * 100, 1)
+            latest_gap_seconds = max(0.0, now_epoch - last_received_at.timestamp())
+            if latest_gap_seconds > interval_seconds * 2:
+                status = "stale"
+            else:
+                status = "good" if completeness >= 95 else "intermittent" if completeness >= 80 else "poor"
+            return jsonify(
+                node_id=node_id, status=status, completeness_pct=completeness,
+                expected_interval_seconds=interval_seconds, received_packets=received_packets,
+                raw_packets=len(times), duplicate_or_burst_packets=len(times) - received_packets,
+                expected_packets=expected_packets, window_seconds=int(elapsed),
+                latest_packet_age_seconds=round(latest_gap_seconds, 1),
+            )
         except PyMongoError:
             app.logger.exception("Failed to calculate telemetry completeness")
             return jsonify(error="failed to calculate telemetry completeness"), 503
