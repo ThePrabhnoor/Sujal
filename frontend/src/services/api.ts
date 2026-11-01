@@ -7,6 +7,7 @@ import {
   MonthlyArchive,
   CompletenessMetrics,
   SixHourAverages,
+  RunInterpretation,
 } from '../types';
 
 const BASE_URL = '/api';
@@ -199,6 +200,24 @@ class ApiService {
     } catch {
       return null;
     }
+  }
+
+  async generateRunInterpretation(nodeId: string, runId: string): Promise<RunInterpretation> {
+    return requestJson<RunInterpretation>(
+      `/v1/nodes/${encodeURIComponent(nodeId)}/runs/${encodeURIComponent(runId)}/interpretation`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+        signal: AbortSignal.timeout(60000),
+      },
+    );
+  }
+
+  async getRunInterpretation(nodeId: string, runId: string): Promise<RunInterpretation> {
+    return requestJson<RunInterpretation>(
+      `/v1/nodes/${encodeURIComponent(nodeId)}/runs/${encodeURIComponent(runId)}/interpretation`,
+    );
   }
 
   async getMonthlyArchives(nodeId: string): Promise<MonthlyArchive[]> {

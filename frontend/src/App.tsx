@@ -18,6 +18,7 @@ import { DashboardView } from './components/views/DashboardView';
 import { MapView } from './components/views/MapView';
 import { LogsAndArchiveView } from './components/views/LogsAndArchiveView';
 import { AlertsView } from './components/views/AlertsView';
+import { GeminiInsightsView } from './components/views/GeminiInsightsView';
 
 export const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<ViewType>('dashboard');
@@ -34,6 +35,7 @@ export const App: React.FC = () => {
   const [isStreaming, setIsStreaming] = useState<boolean>(true);
   const [isBackendConnected, setIsBackendConnected] = useState<boolean>(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
 
   // GSM / GPS Geolocation State (Laptop Geolocation)
@@ -108,7 +110,7 @@ export const App: React.FC = () => {
     const handleHash = () => {
       const fullHash = window.location.hash.replace('#/', '').replace('#', '');
       const [view, queryStr] = fullHash.split('?');
-      if (['dashboard', 'maps', 'logs-archive', 'alerts'].includes(view)) {
+      if (['dashboard', 'maps', 'logs-archive', 'alerts', 'gemini-insights'].includes(view)) {
         setCurrentView(view as ViewType);
       }
       if (queryStr) {
@@ -131,6 +133,7 @@ export const App: React.FC = () => {
 
   // Fetch stored telemetry. Static demo data remains isolated to DashboardView.
   const loadData = useCallback(async (nodeId: string) => {
+    setIsLoadingData(true);
     try {
       const health = await api.checkHealth();
       const backendConnected = health.status === 'ok' && health.database === 'connected';
@@ -149,7 +152,7 @@ export const App: React.FC = () => {
       }
 
       const [history, latest, alertList, abnList, archiveList, telemetryCompleteness, configuredThresholds] = await Promise.all([
-        api.getReadingHistory(nodeId, 60),
+        api.getReadingHistory(nodeId, 100),
         api.getLatestReading(nodeId),
         api.getNodeAlerts(nodeId, 'all'),
         api.getAllAbnormalities(),
@@ -186,6 +189,8 @@ export const App: React.FC = () => {
       setComparison(null);
       setCompleteness(null);
       setLoadError(error instanceof Error ? error.message : 'Could not fetch telemetry data.');
+    } finally {
+      setIsLoadingData(false);
     }
   }, []);
 
@@ -441,6 +446,19 @@ export const App: React.FC = () => {
                 archives={archives}
                 onUpdateAlertStatus={handleUpdateAlertStatus}
                 nodeId={selectedNodeId}
+              />
+            )}
+
+            {/* View 5: Gemini Insights */}
+            {currentView === 'gemini-insights' && (
+              <GeminiInsightsView
+                activeNode={selectedNode}
+                nodes={nodes}
+                onSelectNode={setSelectedNodeId}
+                readings={readings}
+                isBackendConnected={isBackendConnected}
+                isNodeOnline={isNodeOnline}
+                isLoadingReadings={isLoadingData}
               />
             )}
           </div>

@@ -92,6 +92,33 @@ export interface RunComparison {
   note?: string;
 }
 
+export interface RunInterpretation {
+  node_id: string;
+  run_id: string;
+  model: string;
+  summary: {
+    water_comparisons: Record<string, { inlet: number; outlet: number; change_outlet_minus_inlet: number }>;
+    turbidity_reduction_pct: number | null;
+    missing_required_measurements: { inlet: string[]; outlet: string[] };
+    operational_alerts: Array<{
+      code?: string;
+      severity?: string;
+      title?: string;
+      message?: string;
+      status?: string;
+    }>;
+  };
+  interpretation: {
+    observed_changes: string[];
+    operational_interpretation: string;
+    suggested_checks: string[];
+    data_quality_notes: string[];
+    disclaimer: string;
+  };
+  generated_at: string;
+  cached?: boolean;
+}
+
 export interface CompletenessMetrics {
   node_id: string;
   status: string;

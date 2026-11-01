@@ -11,11 +11,12 @@ import {
   GitBranch,
   Clock,
   Terminal,
-  Activity
+  Activity,
+  Sparkles
 } from 'lucide-react';
 import { SystemLogEntry } from '../types';
 
-export type ViewType = 'dashboard' | 'maps' | 'logs-archive' | 'alerts';
+export type ViewType = 'dashboard' | 'maps' | 'logs-archive' | 'alerts' | 'gemini-insights';
 
 interface NavigationProps {
   currentView: ViewType;
@@ -49,6 +50,7 @@ export const Navigation: React.FC<NavigationProps> = ({
     { id: 'maps', label: 'Maps', icon: Map },
     { id: 'logs-archive', label: 'Logs and Archive', icon: Archive },
     { id: 'alerts', label: 'Alerts', icon: Bell, badge: openAlertsCount },
+    { id: 'gemini-insights', label: 'Gemini Insights', icon: Sparkles },
   ];
 
   return (

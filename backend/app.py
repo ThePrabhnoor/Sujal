@@ -17,6 +17,7 @@ from flask_cors import CORS
 from pymongo import ASCENDING, DESCENDING, MongoClient, ReturnDocument
 from pymongo.errors import AutoReconnect, DuplicateKeyError, PyMongoError
 from rules import evaluate_reading
+from ai_interpreter import build_run_summary, interpret_summary
 
 load_dotenv()
 
@@ -158,6 +159,14 @@ def create_app() -> Flask:
                 time.sleep(1)
         else:
             app.logger.warning("Could not ensure MongoDB reading indexes during startup")
+        try:
+            database.ai_interpretations.create_index(
+                [("node_id", ASCENDING), ("run_id", ASCENDING)],
+                unique=True,
+                name="unique_ai_interpretation_per_run",
+            )
+        except PyMongoError:
+            app.logger.warning("Could not ensure Gemini interpretation index during startup")
 
     def db_or_error():
         if database is None:
@@ -758,6 +767,111 @@ def create_app() -> Flask:
         except PyMongoError:
             app.logger.exception("Failed to compare test run")
             return jsonify(error="failed to compare test run"), 503
+
+    @app.post("/api/v1/nodes/<node_id>/runs/<run_id>/interpretation")
+    def generate_run_interpretation(node_id: str, run_id: str):
+        """Generate and persist one cached Gemini interpretation for a completed run."""
+        database, error = db_or_error()
+        if error:
+            return error
+        try:
+            existing = database.ai_interpretations.find_one(
+                {"node_id": node_id, "run_id": run_id}, {"_id": 0}
+            )
+            if existing:
+                if existing.get("generated_at"):
+                    existing["generated_at"] = existing["generated_at"].isoformat()
+                existing["cached"] = True
+                return jsonify(existing), 200
+
+            inlet = database.readings.find_one(
+                {"node_id": node_id, "run_id": run_id, "phase": "inlet"},
+                sort=[("recorded_at", DESCENDING)],
+            )
+            outlet = database.readings.find_one(
+                {"node_id": node_id, "run_id": run_id, "phase": "outlet"},
+                sort=[("recorded_at", DESCENDING)],
+            )
+            if inlet is None or outlet is None:
+                return jsonify(
+                    error="run is not paired yet",
+                    node_id=node_id,
+                    run_id=run_id,
+                    status="waiting_for_pair",
+                    received={"inlet": inlet is not None, "outlet": outlet is not None},
+                ), 409
+
+            api_key = os.getenv("GEMINI_API_KEY", "").strip()
+            if not api_key:
+                return jsonify(error="Gemini is not configured", hint="Set GEMINI_API_KEY in backend/.env"), 503
+            if os.getenv("GEMINI_DATA_POLICY_CONFIRMED", "").strip() != "paid_billing_enabled":
+                return jsonify(
+                    error="Gemini data-use confirmation is required",
+                    hint="Verify this API key belongs to a billing-enabled Gemini project, then set GEMINI_DATA_POLICY_CONFIRMED=paid_billing_enabled",
+                ), 503
+            model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
+
+            run_alerts = list(database.alerts.find(
+                {"node_id": node_id, "run_id": run_id},
+                {"_id": 0, "code": 1, "severity": 1, "title": 1, "message": 1, "status": 1},
+            ).sort("last_seen_at", DESCENDING).limit(20))
+            summary = build_run_summary(node_id, run_id, inlet, outlet, run_alerts)
+            try:
+                interpretation = interpret_summary(summary, api_key, model)
+            except ImportError as exc:
+                app.logger.exception("Gemini SDK is unavailable")
+                return jsonify(error=str(exc)), 503
+            except Exception:
+                app.logger.exception("Gemini interpretation request failed")
+                return jsonify(error="Gemini interpretation failed; check backend logs and Gemini configuration"), 502
+
+            now = utc_now()
+            document = {
+                "node_id": node_id,
+                "run_id": run_id,
+                "model": model,
+                "summary": summary,
+                "interpretation": interpretation,
+                "generated_at": now,
+            }
+            try:
+                database.ai_interpretations.insert_one(document)
+            except DuplicateKeyError:
+                # A simultaneous request may have generated the same run first.
+                cached = database.ai_interpretations.find_one(
+                    {"node_id": node_id, "run_id": run_id}, {"_id": 0}
+                )
+                if cached:
+                    cached["generated_at"] = cached["generated_at"].isoformat()
+                    cached["cached"] = True
+                    return jsonify(cached), 200
+                raise
+            document.pop("_id", None)
+            document["generated_at"] = now.isoformat()
+            document["cached"] = False
+            return jsonify(document), 201
+        except PyMongoError:
+            app.logger.exception("Failed to generate or save Gemini interpretation")
+            return jsonify(error="failed to generate or save interpretation"), 503
+
+    @app.get("/api/v1/nodes/<node_id>/runs/<run_id>/interpretation")
+    def get_run_interpretation(node_id: str, run_id: str):
+        database, error = db_or_error()
+        if error:
+            return error
+        try:
+            document = database.ai_interpretations.find_one(
+                {"node_id": node_id, "run_id": run_id}, {"_id": 0}
+            )
+            if document is None:
+                return jsonify(error="no interpretation saved for this run", node_id=node_id, run_id=run_id), 404
+            if document.get("generated_at"):
+                document["generated_at"] = document["generated_at"].isoformat()
+            document["cached"] = True
+            return jsonify(document)
+        except PyMongoError:
+            app.logger.exception("Failed to fetch Gemini interpretation")
+            return jsonify(error="failed to fetch interpretation"), 503
 
     @app.get("/api/v1/nodes/<node_id>/alerts")
     def node_alerts(node_id: str):
