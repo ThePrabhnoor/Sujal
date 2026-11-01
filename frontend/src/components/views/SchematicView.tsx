@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { motion } from 'framer-motion';
 import {
   GitBranch,
@@ -13,36 +13,31 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { TelemetryReading } from '../../types';
+import { formatReadingValue } from '../../services/api';
 
 interface SchematicViewProps {
   latestReading: TelemetryReading | null;
-  onSimulateBranchSwitch: (branch: 'A' | 'B') => void;
 }
 
-export const SchematicView: React.FC<SchematicViewProps> = ({
-  latestReading,
-  onSimulateBranchSwitch,
-}) => {
-  const [activeBranch, setActiveBranch] = useState<'A' | 'B'>((latestReading?.active_branch as 'A' | 'B') || 'A');
+export const SchematicView: React.FC<SchematicViewProps> = ({ latestReading }) => {
+  const activeBranch = latestReading?.active_branch === 'A' || latestReading?.active_branch === 'B'
+    ? latestReading.active_branch
+    : null;
 
   const measurements = latestReading?.measurements || {
-    ph: 7.20,
-    turbidity_ntu: 5.80,
-    temperature_c: 24.6,
-    mq5_adc: 1830,
-    flow_lpm: { inlet: 2.4, branch_a: 2.3, branch_b: 0.0 }
-  };
-
-  const handleToggle = (branch: 'A' | 'B') => {
-    setActiveBranch(branch);
-    onSimulateBranchSwitch(branch);
+    ph: Number.NaN,
+    turbidity_ntu: Number.NaN,
+    temperature_c: Number.NaN,
+    mq5_adc: Number.NaN,
+    mq5_digital: Number.NaN,
+    flow_lpm: { inlet: Number.NaN, branch_a: Number.NaN, branch_b: Number.NaN }
   };
 
   const isBranchAActive = activeBranch === 'A';
   const isBranchBActive = activeBranch === 'B';
 
-  const flowA = isBranchAActive ? measurements.flow_lpm.branch_a || 2.3 : 0.0;
-  const flowB = isBranchBActive ? measurements.flow_lpm.branch_b || 2.25 : 0.0;
+  const flowA = isBranchAActive ? measurements.flow_lpm.branch_a : Number.NaN;
+  const flowB = isBranchBActive ? measurements.flow_lpm.branch_b : Number.NaN;
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
@@ -51,40 +46,17 @@ export const SchematicView: React.FC<SchematicViewProps> = ({
         <div>
           <div className="flex items-center gap-2">
             <GitBranch className="w-5 h-5 text-cyan-400" />
-            <h2 className="text-lg font-bold text-slate-100">Interactive Plumbing & Solenoid Schematic</h2>
+            <h2 className="text-lg font-bold text-slate-100">Plumbing & Solenoid Schematic</h2>
             <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
               DUAL-BRANCH
             </span>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Real-time physical plumbing state with animated water displacement, solenoid valve actuation, and inline flow sensors.
+            Read-only view. Branch and valve state are taken from the latest ESP32 packet; this dashboard does not actuate valves.
           </p>
         </div>
 
-        {/* Branch Switcher Controls */}
-        <div className="flex items-center gap-2 bg-[#0a0e18] p-1.5 rounded-lg border border-[#1f2b3f]">
-          <span className="text-xs text-slate-400 px-2 font-medium">Select Active Branch:</span>
-          <button
-            onClick={() => handleToggle('A')}
-            className={`px-4 py-1.5 rounded-md text-xs font-bold font-mono transition-all ${
-              isBranchAActive
-                ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-md shadow-cyan-600/30'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            Branch A (Open)
-          </button>
-          <button
-            onClick={() => handleToggle('B')}
-            className={`px-4 py-1.5 rounded-md text-xs font-bold font-mono transition-all ${
-              isBranchBActive
-                ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-md shadow-cyan-600/30'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            Branch B (Open)
-          </button>
-        </div>
+        <div className="text-xs text-slate-400">Reported branch: {activeBranch || 'not reported'}</div>
       </div>
 
       {/* Interactive Animated SVG Piping Schematic */}
@@ -181,12 +153,12 @@ export const SchematicView: React.FC<SchematicViewProps> = ({
               <rect width="70" height="40" rx="6" fill="#141c2c" stroke="#334155" strokeWidth="1.5" />
               <text x="35" y="16" textAnchor="middle" className="fill-slate-400 text-[9px] font-semibold">FLOW INLET</text>
               <text x="35" y="31" textAnchor="middle" className="fill-emerald-400 font-mono font-bold text-[12px]">
-                {measurements.flow_lpm.inlet.toFixed(1)} LPM
+                {formatReadingValue(measurements.flow_lpm.inlet, 1)} LPM
               </text>
             </g>
 
             {/* SOLENOID VALVE A (Top Branch) */}
-            <g transform="translate(340, 70)" className="cursor-pointer" onClick={() => handleToggle('A')}>
+            <g transform="translate(340, 70)">
               <rect
                 width="90"
                 height="80"
@@ -215,7 +187,7 @@ export const SchematicView: React.FC<SchematicViewProps> = ({
                 FILTER BED A (Active)
               </text>
               <text x="80" y="44" textAnchor="middle" className="fill-cyan-400 font-mono text-[12px]">
-                {flowA.toFixed(1)} LPM
+                {formatReadingValue(flowA, 1)} LPM
               </text>
               <text x="80" y="60" textAnchor="middle" className="fill-slate-400 text-[9px]">
                 Activated Carbon + Sand
@@ -223,7 +195,7 @@ export const SchematicView: React.FC<SchematicViewProps> = ({
             </g>
 
             {/* SOLENOID VALVE B (Bottom Branch) */}
-            <g transform="translate(340, 270)" className="cursor-pointer" onClick={() => handleToggle('B')}>
+            <g transform="translate(340, 270)">
               <rect
                 width="90"
                 height="80"
@@ -252,7 +224,7 @@ export const SchematicView: React.FC<SchematicViewProps> = ({
                 FILTER BED B (Standby)
               </text>
               <text x="80" y="44" textAnchor="middle" className="fill-cyan-400 font-mono text-[12px]">
-                {flowB.toFixed(1)} LPM
+                {formatReadingValue(flowB, 1)} LPM
               </text>
               <text x="80" y="60" textAnchor="middle" className="fill-slate-400 text-[9px]">
                 Dual-Stage Ceramic Bed
@@ -267,13 +239,13 @@ export const SchematicView: React.FC<SchematicViewProps> = ({
                 OUTLET TANK
               </text>
               <text x="50" y="55" textAnchor="middle" className="fill-white font-mono font-bold text-[13px]">
-                {measurements.turbidity_ntu.toFixed(2)} NTU
+                {formatReadingValue(measurements.turbidity_ntu)} NTU
               </text>
               <text x="50" y="75" textAnchor="middle" className="fill-emerald-300 font-mono text-[11px]">
-                pH {measurements.ph.toFixed(2)}
+                pH {formatReadingValue(measurements.ph)}
               </text>
               <text x="50" y="95" textAnchor="middle" className="fill-amber-300 font-mono text-[10px]">
-                {measurements.temperature_c.toFixed(1)} °C
+                {formatReadingValue(measurements.temperature_c, 1)} °C
               </text>
             </g>
           </svg>
@@ -301,7 +273,7 @@ export const SchematicView: React.FC<SchematicViewProps> = ({
           </div>
 
           <div className="text-[11px] font-mono text-cyan-400">
-            Click on valves or buttons above to toggle hydraulic branches
+            Valve positions are reported by the ESP32; no remote control is available here.
           </div>
         </div>
       </div>
@@ -322,14 +294,14 @@ export const SchematicView: React.FC<SchematicViewProps> = ({
 
           <div className="bg-[#0b101c] p-3.5 rounded-lg border border-slate-800">
             <div className="text-xs text-slate-400">Active Filtration Run</div>
-            <div className="text-lg font-bold font-mono text-cyan-400 mt-1">{latestReading?.run_id || 'run-118'}</div>
+            <div className="text-lg font-bold font-mono text-cyan-400 mt-1">{latestReading?.run_id || '—'}</div>
             <div className="text-[10px] text-slate-400 mt-0.5">Alternating inlet/outlet cycle</div>
           </div>
 
           <div className="bg-[#0b101c] p-3.5 rounded-lg border border-slate-800">
             <div className="text-xs text-slate-400">Headspace Gas Reading</div>
             <div className="text-lg font-bold font-mono text-purple-400 mt-1">
-              {measurements.mq5_adc} ADC
+              {formatReadingValue(measurements.mq5_adc, 0)} ADC
             </div>
             <div className="text-[10px] text-slate-400 mt-0.5">Uncalibrated environmental monitor</div>
           </div>

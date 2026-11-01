@@ -30,27 +30,33 @@ export interface TelemetryReading {
   measurements: Measurements;
   device_status: DeviceStatus;
   received_at?: string;
+  filter_clogged_percent?: number;
 }
 
 export interface NodeLocation {
   latitude: number;
   longitude: number;
-  source: 'manual' | 'gps';
+  source: 'manual' | 'gps' | 'gsm';
   verified: boolean;
+  accuracy_meters?: number;
 }
 
 export interface NodeProfile {
   node_id: string;
   name: string;
+  zone: string;
   address?: string;
   location: NodeLocation;
   updated_at?: string;
+  filter_clogged_percent: number;
+  filter_status: 'optimal' | 'moderate' | 'clogged';
+  last_maintenance?: string;
 }
 
 export interface AlertItem {
   _id: string;
   code: string;
-  category: 'measurement' | 'environmental_sensor' | 'hardware' | 'network';
+  category: 'measurement' | 'environmental_sensor' | 'hardware' | 'network' | 'filter';
   severity: 'high' | 'warning' | 'info';
   title: string;
   message: string;
@@ -79,30 +85,44 @@ export interface OperatingThresholds {
 export interface RunComparison {
   node_id: string;
   run_id: string;
-  status: 'complete' | 'waiting_for_pair';
+  status: 'complete' | 'waiting_for_pair' | 'paired';
   inlet?: TelemetryReading;
   outlet?: TelemetryReading;
   turbidity_reduction_percent?: number;
+  turbidity_reduction_pct?: number;
   turbidity_delta_ntu?: number;
   ph_delta?: number;
   temp_delta_c?: number;
-}
-
-export interface MonthlyArchive {
-  month: string; // "2026-10"
-  count: number;
-  first_timestamp: string;
-  last_timestamp: string;
-  download_url: string;
+  comparisons?: Record<string, any>;
+  received?: { inlet?: boolean; outlet?: boolean };
 }
 
 export interface CompletenessMetrics {
   node_id: string;
-  total_packets: number;
-  expected_interval_seconds: number;
-  average_interval_seconds: number;
-  completeness_percent: number;
-  dropped_estimate: number;
-  last_seen: string;
+  total_expected?: number;
+  total_received?: number;
+  completeness_percent: number | null;
+  missing_runs?: string[];
+  expected_interval_seconds?: number;
+  latest_packet_age_seconds?: number | null;
+  status?: string;
+  received_packets?: number;
+  expected_packets?: number;
+  duplicate_or_burst_packets?: number;
 }
 
+export interface MonthlyArchive {
+  month: string;
+  count: number;
+  first_timestamp: string;
+  last_timestamp: string;
+  download_url: string;
+  size_kb: number;
+}
+
+export interface SystemLogEntry {
+  id: string;
+  timestamp: string;
+  message: string;
+  type: 'info' | 'warn' | 'success' | 'alert';
+}

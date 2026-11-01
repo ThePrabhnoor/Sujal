@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { motion } from 'framer-motion';
 import {
   Activity,
@@ -14,50 +14,22 @@ import {
   Gauge,
   Sliders
 } from 'lucide-react';
-import { RunComparison, CompletenessMetrics, TelemetryReading } from '../../types';
+import { RunComparison, CompletenessMetrics } from '../../types';
+import { formatReadingValue } from '../../services/api';
 
 interface DiagnosticsViewProps {
   comparison: RunComparison | null;
   completeness: CompletenessMetrics | null;
-  onSimulateCustomPacket: (data: any) => void;
   nodeId: string;
 }
 
 export const DiagnosticsView: React.FC<DiagnosticsViewProps> = ({
   comparison,
   completeness,
-  onSimulateCustomPacket,
   nodeId,
 }) => {
-  // Test Packet Form State
-  const [formTurbidity, setFormTurbidity] = useState('6.2');
-  const [formPh, setFormPh] = useState('7.25');
-  const [formTemp, setFormTemp] = useState('24.8');
-  const [formActiveBranch, setFormActiveBranch] = useState<'A' | 'B'>('A');
-  const [formMq5, setFormMq5] = useState('1840');
-  const [isSuccess, setIsSuccess] = useState(false);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    onSimulateCustomPacket({
-      active_branch: formActiveBranch,
-      measurements: {
-        ph: parseFloat(formPh) || 7.2,
-        turbidity_ntu: parseFloat(formTurbidity) || 5.8,
-        temperature_c: parseFloat(formTemp) || 24.6,
-        mq5_adc: parseInt(formMq5) || 1830,
-        mq5_digital: 0,
-        flow_lpm: {
-          inlet: 2.4,
-          branch_a: formActiveBranch === 'A' ? 2.3 : 0.0,
-          branch_b: formActiveBranch === 'B' ? 2.2 : 0.0,
-        }
-      }
-    });
-
-    setIsSuccess(true);
-    setTimeout(() => setIsSuccess(false), 2500);
-  };
+  const inlet = comparison?.comparisons || {};
+  const paired = comparison?.status === 'paired';
 
   return (
     <div className="p-6 space-y-8 max-w-7xl mx-auto">
@@ -79,15 +51,15 @@ export const DiagnosticsView: React.FC<DiagnosticsViewProps> = ({
               Auto-Assigned Pair Sequence
             </span>
             <h3 className="text-base font-bold text-slate-100 font-mono mt-0.5">
-              Run Identifier: {comparison?.run_id || 'run-118'}
+              Run Identifier: {comparison?.run_id || 'Waiting for a pair'}
             </h3>
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="text-xs px-2.5 py-1 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 font-bold font-mono">
-              PAIR MATCHED
+            <span className={`text-xs px-2.5 py-1 rounded border font-bold font-mono ${paired ? 'bg-emerald-950 text-emerald-400 border-emerald-800' : 'bg-amber-950 text-amber-300 border-amber-800'}`}>
+              {paired ? 'PAIR MATCHED' : 'WAITING FOR PAIR'}
             </span>
-            <span className="text-xs text-slate-400">Status: Complete</span>
+            <span className="text-xs text-slate-400">Status: {comparison?.status || 'No comparison'}</span>
           </div>
         </div>
 
@@ -106,25 +78,25 @@ export const DiagnosticsView: React.FC<DiagnosticsViewProps> = ({
               <div className="flex justify-between py-1 border-b border-slate-800">
                 <span className="text-slate-400">Turbidity:</span>
                 <span className="text-amber-300 font-bold">
-                  {comparison?.inlet?.measurements.turbidity_ntu.toFixed(2) || '9.40'} NTU
+                  {formatReadingValue(inlet.turbidity_ntu?.inlet)} NTU
                 </span>
               </div>
               <div className="flex justify-between py-1 border-b border-slate-800">
                 <span className="text-slate-400">pH Level:</span>
                 <span className="text-slate-200">
-                  {comparison?.inlet?.measurements.ph.toFixed(2) || '7.22'}
+                  {formatReadingValue(inlet.ph?.inlet)}
                 </span>
               </div>
               <div className="flex justify-between py-1 border-b border-slate-800">
                 <span className="text-slate-400">Temperature:</span>
                 <span className="text-slate-200">
-                  {comparison?.inlet?.measurements.temperature_c.toFixed(1) || '24.5'} °C
+                  {formatReadingValue(inlet.temperature_c?.inlet, 1)} °C
                 </span>
               </div>
               <div className="flex justify-between py-1">
                 <span className="text-slate-400">Event Key:</span>
                 <span className="text-slate-400 text-[10px] truncate max-w-[150px]">
-                  {comparison?.inlet?.event_id || 'esp32-boot7-rdg37'}
+                  {comparison?.received?.inlet ? 'Received' : 'Not received'}
                 </span>
               </div>
             </div>
@@ -139,13 +111,13 @@ export const DiagnosticsView: React.FC<DiagnosticsViewProps> = ({
             <div className="my-3 space-y-2">
               <div className="text-4xl font-extrabold font-mono text-emerald-400 flex items-center justify-center gap-1">
                 <TrendingDown className="w-7 h-7" />
-                -38.3%
+                {comparison?.turbidity_reduction_pct == null ? '—' : `${comparison.turbidity_reduction_pct}%`}
               </div>
               <div className="text-xs text-slate-300 font-semibold">
                 Turbidity Reduction Percentage
               </div>
               <div className="text-xs font-mono text-cyan-300/80">
-                Δ NTU: -3.60 NTU (from 9.40 to 5.80)
+                Δ NTU: {formatReadingValue(inlet.turbidity_ntu?.change)}
               </div>
             </div>
 
@@ -167,25 +139,25 @@ export const DiagnosticsView: React.FC<DiagnosticsViewProps> = ({
               <div className="flex justify-between py-1 border-b border-slate-800">
                 <span className="text-slate-400">Turbidity:</span>
                 <span className="text-cyan-300 font-bold">
-                  {comparison?.outlet?.measurements.turbidity_ntu.toFixed(2) || '5.80'} NTU
+                  {formatReadingValue(inlet.turbidity_ntu?.outlet)} NTU
                 </span>
               </div>
               <div className="flex justify-between py-1 border-b border-slate-800">
                 <span className="text-slate-400">pH Level:</span>
                 <span className="text-slate-200">
-                  {comparison?.outlet?.measurements.ph.toFixed(2) || '7.20'}
+                  {formatReadingValue(inlet.ph?.outlet)}
                 </span>
               </div>
               <div className="flex justify-between py-1 border-b border-slate-800">
                 <span className="text-slate-400">Temperature:</span>
                 <span className="text-slate-200">
-                  {comparison?.outlet?.measurements.temperature_c.toFixed(1) || '24.6'} °C
+                  {formatReadingValue(inlet.temperature_c?.outlet, 1)} °C
                 </span>
               </div>
               <div className="flex justify-between py-1">
                 <span className="text-slate-400">Event Key:</span>
                 <span className="text-slate-400 text-[10px] truncate max-w-[150px]">
-                  {comparison?.outlet?.event_id || 'esp32-boot7-rdg38'}
+                  {comparison?.received?.outlet ? 'Received' : 'Not received'}
                 </span>
               </div>
             </div>
@@ -205,104 +177,39 @@ export const DiagnosticsView: React.FC<DiagnosticsViewProps> = ({
             <div className="flex justify-between py-2 border-b border-slate-800">
               <span className="text-slate-400">Expected Telemetry Cadence:</span>
               <span className="font-mono font-bold text-slate-200">
-                {completeness?.expected_interval_seconds || 30} seconds
+                {completeness?.expected_interval_seconds ?? 'Not configured'}{completeness?.expected_interval_seconds ? ' seconds' : ''}
               </span>
             </div>
 
             <div className="flex justify-between py-2 border-b border-slate-800">
-              <span className="text-slate-400">Average Observed Cadence:</span>
+              <span className="text-slate-400">Age of Latest Packet:</span>
               <span className="font-mono font-bold text-cyan-400">
-                {completeness?.average_interval_seconds || 30.14} seconds
+                {completeness?.latest_packet_age_seconds == null ? '—' : `${Math.round(completeness.latest_packet_age_seconds)} seconds since last packet`}
               </span>
             </div>
 
             <div className="flex justify-between py-2 border-b border-slate-800">
               <span className="text-slate-400">Packet Completeness Ratio:</span>
               <span className="font-mono font-bold text-emerald-400">
-                {completeness?.completeness_percent || 99.5}%
+                {completeness?.completeness_percent == null ? 'Not configured' : `${completeness.completeness_percent}% (${completeness.status})`}
               </span>
             </div>
 
             <div className="flex justify-between py-2">
-              <span className="text-slate-400">Estimated Dropped Packets:</span>
+              <span className="text-slate-400">Packet Counts:</span>
               <span className="font-mono text-slate-300">
-                {completeness?.dropped_estimate || 14} of {completeness?.total_packets || 2880}
+                {completeness ? `${completeness.received_packets} received / ${completeness.expected_packets} expected; ${completeness.duplicate_or_burst_packets} burst/duplicate` : '—'}
               </span>
             </div>
           </div>
         </div>
 
-        {/* SECTION 3: Live Ingestion Packet Simulator */}
+        {/* ESP32 owns ingestion in real mode; the browser does not invent readings. */}
         <div className="bg-[#121927] border border-[#1f2b3f] rounded-xl p-5 shadow-xl">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-              <Cpu className="w-4 h-4 text-cyan-400" />
-              ESP32 Telemetry Test Injection
-            </h3>
-            {isSuccess && (
-              <span className="text-[11px] font-bold text-emerald-400 flex items-center gap-1 animate-pulse">
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                Ingested Successfully!
-              </span>
-            )}
-          </div>
-
-          <form onSubmit={handleSubmit} className="space-y-3 text-xs">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-slate-400 block mb-1">Turbidity (NTU)</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={formTurbidity}
-                  onChange={(e) => setFormTurbidity(e.target.value)}
-                  className="w-full bg-[#0a0e18] border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-cyan-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="text-slate-400 block mb-1">pH Reading</label>
-                <input
-                  type="number"
-                  step="0.05"
-                  value={formPh}
-                  onChange={(e) => setFormPh(e.target.value)}
-                  className="w-full bg-[#0a0e18] border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-cyan-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="text-slate-400 block mb-1">Temperature (°C)</label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={formTemp}
-                  onChange={(e) => setFormTemp(e.target.value)}
-                  className="w-full bg-[#0a0e18] border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-cyan-500 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="text-slate-400 block mb-1">Active Branch</label>
-                <select
-                  value={formActiveBranch}
-                  onChange={(e) => setFormActiveBranch(e.target.value as 'A' | 'B')}
-                  className="w-full bg-[#0a0e18] border border-slate-800 rounded px-2.5 py-1.5 text-slate-100 font-mono focus:border-cyan-500 focus:outline-none"
-                >
-                  <option value="A">Branch A</option>
-                  <option value="B">Branch B</option>
-                </select>
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              className="w-full mt-2 py-2 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-semibold flex items-center justify-center gap-1.5 shadow transition-transform active:scale-95"
-            >
-              <Send className="w-3.5 h-3.5" />
-              <span>Simulate ESP32 POST Request</span>
-            </button>
-          </form>
+          <h3 className="text-sm font-bold text-slate-100">Reading source</h3>
+          <p className="text-xs text-slate-400 mt-2">
+            Values on this page come from saved backend readings. To add a reading, send it from the ESP32; browser-side simulated packets are disabled in live mode.
+          </p>
         </div>
       </div>
     </div>

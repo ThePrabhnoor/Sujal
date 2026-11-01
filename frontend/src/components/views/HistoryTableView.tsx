@@ -16,6 +16,7 @@ import {
   Activity
 } from 'lucide-react';
 import { TelemetryReading } from '../../types';
+import { formatReadingValue } from '../../services/api';
 
 interface HistoryTableViewProps {
   readings: TelemetryReading[];
@@ -184,7 +185,7 @@ export const HistoryTableView: React.FC<HistoryTableViewProps> = ({
                     </td>
 
                     <td className="py-3 px-4 font-mono font-bold text-slate-200">
-                      {reading.measurements.ph.toFixed(2)}
+                      {formatReadingValue(reading.measurements.ph)}
                     </td>
 
                     <td className="py-3 px-4 font-mono font-bold">
@@ -195,28 +196,28 @@ export const HistoryTableView: React.FC<HistoryTableViewProps> = ({
                             : 'text-slate-200'
                         }
                       >
-                        {reading.measurements.turbidity_ntu.toFixed(2)} NTU
+                        {formatReadingValue(reading.measurements.turbidity_ntu)} NTU
                       </span>
                     </td>
 
                     <td className="py-3 px-4 font-mono text-slate-300">
-                      {reading.measurements.temperature_c.toFixed(1)} °C
+                      {formatReadingValue(reading.measurements.temperature_c, 1)} °C
                     </td>
 
                     <td className="py-3 px-4 font-mono text-slate-300">
-                      {reading.measurements.flow_lpm.inlet.toFixed(2)} LPM
+                      {formatReadingValue(reading.measurements.flow_lpm.inlet)} LPM
                     </td>
 
                     <td className="py-3 px-4 font-mono text-cyan-300">
-                      {(reading.active_branch === 'B'
+                      {formatReadingValue(reading.active_branch === 'B'
                         ? reading.measurements.flow_lpm.branch_b
                         : reading.measurements.flow_lpm.branch_a
-                      ).toFixed(2)}{' '}
+                      )}{' '}
                       LPM
                     </td>
 
                     <td className="py-3 px-4 font-mono text-purple-300">
-                      {reading.measurements.mq5_adc}
+                      {formatReadingValue(reading.measurements.mq5_adc, 0)}
                     </td>
 
                     <td className="py-3 px-4 text-right">
@@ -301,31 +302,31 @@ export const HistoryTableView: React.FC<HistoryTableViewProps> = ({
                 <div className="space-y-2 font-mono">
                   <div className="flex justify-between py-1 border-b border-slate-800">
                     <span className="text-slate-400">pH Level:</span>
-                    <span className="text-slate-100 font-bold">{selectedReading.measurements.ph.toFixed(2)}</span>
+                    <span className="text-slate-100 font-bold">{formatReadingValue(selectedReading.measurements.ph)}</span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-slate-800">
                     <span className="text-slate-400">Turbidity:</span>
-                    <span className="text-slate-100 font-bold">{selectedReading.measurements.turbidity_ntu.toFixed(2)} NTU</span>
+                    <span className="text-slate-100 font-bold">{formatReadingValue(selectedReading.measurements.turbidity_ntu)} NTU</span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-slate-800">
                     <span className="text-slate-400">Temperature:</span>
-                    <span className="text-slate-100 font-bold">{selectedReading.measurements.temperature_c.toFixed(1)} °C</span>
+                    <span className="text-slate-100 font-bold">{formatReadingValue(selectedReading.measurements.temperature_c, 1)} °C</span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-slate-800">
                     <span className="text-slate-400">Inlet Flow Rate:</span>
-                    <span className="text-slate-100 font-bold">{selectedReading.measurements.flow_lpm.inlet.toFixed(2)} LPM</span>
+                    <span className="text-slate-100 font-bold">{formatReadingValue(selectedReading.measurements.flow_lpm.inlet)} LPM</span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-slate-800">
                     <span className="text-slate-400">Branch A Flow:</span>
-                    <span className="text-slate-100 font-bold">{selectedReading.measurements.flow_lpm.branch_a.toFixed(2)} LPM</span>
+                    <span className="text-slate-100 font-bold">{formatReadingValue(selectedReading.measurements.flow_lpm.branch_a)} LPM</span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-slate-800">
                     <span className="text-slate-400">Branch B Flow:</span>
-                    <span className="text-slate-100 font-bold">{selectedReading.measurements.flow_lpm.branch_b.toFixed(2)} LPM</span>
+                    <span className="text-slate-100 font-bold">{formatReadingValue(selectedReading.measurements.flow_lpm.branch_b)} LPM</span>
                   </div>
                   <div className="flex justify-between py-1">
                     <span className="text-slate-400">MQ-5 Headspace ADC:</span>
-                    <span className="text-purple-300 font-bold">{selectedReading.measurements.mq5_adc} (uncalibrated)</span>
+                    <span className="text-purple-300 font-bold">{formatReadingValue(selectedReading.measurements.mq5_adc, 0)} (uncalibrated)</span>
                   </div>
                 </div>
               </div>

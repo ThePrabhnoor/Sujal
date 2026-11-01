@@ -16,14 +16,12 @@ import { NodeProfile, OperatingThresholds } from '../../types';
 
 interface SettingsViewProps {
   thresholds: OperatingThresholds;
-  onSaveThresholds: (thresholds: OperatingThresholds) => void;
   nodeProfile: NodeProfile;
-  onSaveProfile: (profile: Partial<NodeProfile>) => void;
+  onSaveProfile: (profile: Partial<NodeProfile>) => Promise<void> | void;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
   thresholds,
-  onSaveThresholds,
   nodeProfile,
   onSaveProfile,
 }) => {
@@ -33,49 +31,44 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [phMax, setPhMax] = useState(thresholds.ph_max.toString());
   const [tempMin, setTempMin] = useState(thresholds.temperature_min_c.toString());
   const [tempMax, setTempMax] = useState(thresholds.temperature_max_c.toString());
-  const [mq5Thresh, setMq5Thresh] = useState(thresholds.mq5_adc_alert_threshold.toString());
-  const [intervalSec, setIntervalSec] = useState(thresholds.expected_interval_seconds.toString());
-  const [threshSaved, setThreshSaved] = useState(false);
+  const [mq5Thresh, setMq5Thresh] = useState(Number.isFinite(thresholds.mq5_adc_alert_threshold) ? thresholds.mq5_adc_alert_threshold.toString() : '');
+  const [intervalSec, setIntervalSec] = useState(Number.isFinite(thresholds.expected_interval_seconds) ? thresholds.expected_interval_seconds.toString() : '');
 
   // Local Profile State
-  const [nodeName, setNodeName] = useState(nodeProfile.name);
+  const [nodeName, setNodeName] = useState(nodeProfile.name || nodeProfile.node_id);
   const [address, setAddress] = useState(nodeProfile.address || '');
-  const [lat, setLat] = useState(nodeProfile.location.latitude.toString());
-  const [lon, setLon] = useState(nodeProfile.location.longitude.toString());
-  const [locSource, setLocSource] = useState<'manual' | 'gps'>(nodeProfile.location.source);
-  const [isVerified, setIsVerified] = useState(nodeProfile.location.verified);
+  const [lat, setLat] = useState(Number.isFinite(nodeProfile.location?.latitude) ? String(nodeProfile.location?.latitude) : '');
+  const [lon, setLon] = useState(Number.isFinite(nodeProfile.location?.longitude) ? String(nodeProfile.location?.longitude) : '');
+  const [locSource, setLocSource] = useState<'manual' | 'gps' | 'gsm'>(nodeProfile.location?.source || 'manual');
+  const [isVerified, setIsVerified] = useState(nodeProfile.location?.verified || false);
   const [profileSaved, setProfileSaved] = useState(false);
+  const [profileError, setProfileError] = useState('');
 
-  const handleThresholdsSubmit = (e: React.FormEvent) => {
+  const handleProfileSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onSaveThresholds({
-      ...thresholds,
-      turbidity_limit_ntu: parseFloat(turbLimit) || 5.0,
-      ph_min: parseFloat(phMin) || 6.5,
-      ph_max: parseFloat(phMax) || 8.5,
-      temperature_min_c: parseFloat(tempMin) || 5.0,
-      temperature_max_c: parseFloat(tempMax) || 40.0,
-      mq5_adc_alert_threshold: parseInt(mq5Thresh) || 2200,
-      expected_interval_seconds: parseInt(intervalSec) || 30,
-    });
-    setThreshSaved(true);
-    setTimeout(() => setThreshSaved(false), 2500);
-  };
-
-  const handleProfileSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    onSaveProfile({
+    const latitude = Number(lat);
+    const longitude = Number(lon);
+    if (!lat.trim() || !lon.trim() || !Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+      setProfileError('Enter valid latitude and longitude before saving this node profile.');
+      return;
+    }
+    setProfileError('');
+    try {
+      await onSaveProfile({
       name: nodeName,
       address,
       location: {
-        latitude: parseFloat(lat) || 28.6139,
-        longitude: parseFloat(lon) || 77.2090,
+        latitude,
+        longitude,
         source: locSource,
         verified: isVerified,
       }
-    });
-    setProfileSaved(true);
-    setTimeout(() => setProfileSaved(false), 2500);
+      });
+      setProfileSaved(true);
+      setTimeout(() => setProfileSaved(false), 2500);
+    } catch (error) {
+      setProfileError(error instanceof Error ? error.message : 'Could not save the node profile.');
+    }
   };
 
   return (
@@ -86,7 +79,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <h2 className="text-lg font-bold text-slate-100">Thresholds & Station Profile Settings</h2>
         </div>
         <p className="text-xs text-slate-400">
-          Configure rule-based monitoring thresholds and manage survey metadata for node {nodeProfile.node_id}.
+          Backend environment settings control alert thresholds. This page can edit node survey metadata for {nodeProfile.node_id}.
         </p>
       </div>
 
@@ -103,15 +96,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 Triggers flags for operator review; not a potable water safety limit.
               </p>
             </div>
-            {threshSaved && (
-              <span className="text-xs font-bold text-emerald-400 flex items-center gap-1 animate-pulse">
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                Saved!
-              </span>
-            )}
           </div>
 
-          <form onSubmit={handleThresholdsSubmit} className="space-y-4 text-xs">
+          <form onSubmit={(event) => event.preventDefault()} className="space-y-4 text-xs">
+            <fieldset disabled className="space-y-4 opacity-70">
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="text-slate-300 font-semibold block mb-1">
@@ -213,8 +201,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               className="w-full py-2.5 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-semibold flex items-center justify-center gap-1.5 shadow transition-all active:scale-95 mt-4"
             >
               <Save className="w-4 h-4" />
-              <span>Save Operating Thresholds</span>
+              <span>Thresholds are read-only here</span>
             </button>
+            </fieldset>
           </form>
         </div>
 
@@ -229,6 +218,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <p className="text-[11px] text-slate-400 mt-0.5">
                 Saved profile for map display via <code className="text-sky-300 font-mono text-[10px]">PUT /api/v1/nodes/:id/profile</code>
               </p>
+              {!nodeProfile.location && <p className="text-[11px] text-amber-300 mt-1">This node has readings but no saved location profile yet.</p>}
             </div>
             {profileSaved && (
               <span className="text-xs font-bold text-emerald-400 flex items-center gap-1 animate-pulse">
@@ -239,6 +229,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
 
           <form onSubmit={handleProfileSubmit} className="space-y-4 text-xs">
+            {profileError && <p role="alert" className="text-amber-300">{profileError}</p>}
             <div>
               <label className="text-slate-300 font-semibold block mb-1">Station / Node ID</label>
               <input

@@ -1,29 +1,27 @@
-import React, { useState } from 'react';
-import { motion } from 'framer-motion';
+import React, { useEffect, useRef, useState } from 'react';
+import L from 'leaflet';
 import {
-  MapPin,
-  Compass,
   Navigation as NavIcon,
+  Compass,
   Layers,
-  Search,
+  Activity,
+  Droplets,
+  Filter,
   CheckCircle2,
   AlertTriangle,
   Radio,
-  Maximize2,
-  Minimize2,
-  Droplets,
-  Activity,
-  Gauge
+  MapPin
 } from 'lucide-react';
 import { NodeProfile, TelemetryReading } from '../../types';
-import { Sparkline } from '../charts/Sparkline';
 
 interface MapViewProps {
   nodes: NodeProfile[];
   selectedNodeId: string;
   onSelectNode: (nodeId: string) => void;
   latestReading: TelemetryReading | null;
-  readings: TelemetryReading[];
+  gsmCoords: { lat: number; lon: number } | null;
+  onSyncGsmLocation: () => void;
+  isGsmSyncing: boolean;
 }
 
 export const MapView: React.FC<MapViewProps> = ({
@@ -31,324 +29,227 @@ export const MapView: React.FC<MapViewProps> = ({
   selectedNodeId,
   onSelectNode,
   latestReading,
-  readings,
+  gsmCoords,
+  onSyncGsmLocation,
+  isGsmSyncing,
 }) => {
-  const [filter, setFilter] = useState<'all' | 'verified' | 'warning'>('all');
-  const [zoomLevel, setZoomLevel] = useState<number>(1);
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  const mapInstanceRef = useRef<L.Map | null>(null);
+  const markersRef = useRef<Record<string, L.Marker>>({});
 
-  const selectedNode = nodes.find(n => n.node_id === selectedNodeId) || nodes[0];
+  // Initialize Leaflet Map
+  useEffect(() => {
+    if (!mapContainerRef.current) return;
+    if (mapInstanceRef.current) return;
 
-  const filteredNodes = nodes.filter(n => {
-    if (filter === 'verified') return n.location.verified;
-    if (filter === 'warning') return n.node_id === 'SJ-001';
-    return true;
-  });
+    // Center on selected node or GSM coordinates (Delhi NCR baseline)
+    const initialLat = gsmCoords?.lat || nodes[0]?.location.latitude || 28.6139;
+    const initialLon = gsmCoords?.lon || nodes[0]?.location.longitude || 77.2090;
 
-  const phHistory = readings.map(r => r.measurements.ph);
-  const turbHistory = readings.map(r => r.measurements.turbidity_ntu);
+    const map = L.map(mapContainerRef.current, {
+      center: [initialLat, initialLon],
+      zoom: 12,
+      zoomControl: false,
+    });
 
-  return (
-    <div className="relative w-full h-[calc(100vh-4rem)] overflow-hidden bg-[#090d16] select-none">
-      {/* SVG Stylized Dark Vector Map Canvas */}
-      <div className="absolute inset-0 z-0">
-        <svg
-          viewBox="0 0 1200 800"
-          className="w-full h-full object-cover transition-transform duration-300"
-          style={{ transform: `scale(${zoomLevel})` }}
-        >
-          <defs>
-            {/* Grid Pattern */}
-            <pattern id="mapGrid" width="40" height="40" patternUnits="userSpaceOnUse">
-              <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#141d2d" strokeWidth="0.8" />
-            </pattern>
-            {/* Water River Gradients */}
-            <linearGradient id="riverGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stopColor="#0284c7" stopOpacity="0.4" />
-              <stop offset="50%" stopColor="#0369a1" stopOpacity="0.6" />
-              <stop offset="100%" stopColor="#075985" stopOpacity="0.4" />
-            </linearGradient>
-            {/* Radar Sweep Gradient */}
-            <radialGradient id="radarSweep" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stopColor="#0ea5e9" stopOpacity="0.15" />
-              <stop offset="70%" stopColor="#0ea5e9" stopOpacity="0.05" />
-              <stop offset="100%" stopColor="#0ea5e9" stopOpacity="0" />
-            </radialGradient>
-          </defs>
+    L.control.zoom({ position: 'topright' }).addTo(map);
 
-          {/* Background Grid */}
-          <rect width="100%" height="100%" fill="#0a0e18" />
-          <rect width="100%" height="100%" fill="url(#mapGrid)" />
+    // Crisp OpenStreetMap standard tiles (real roads, rivers, water bodies, no API key required)
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      maxZoom: 19,
+    }).addTo(map);
 
-          {/* Contour Lines & Topological Shapes */}
-          <path
-            d="M 100 200 Q 300 150 500 280 T 900 220 T 1150 350"
-            fill="none"
-            stroke="#162236"
-            strokeWidth="1.5"
-            strokeDasharray="6 4"
-          />
-          <path
-            d="M 50 450 Q 350 400 650 520 T 1100 480"
-            fill="none"
-            stroke="#162236"
-            strokeWidth="1.5"
-            strokeDasharray="6 4"
-          />
+    mapInstanceRef.current = map;
 
-          {/* Simulated River / Waterway (Yamuna River Canal Feeder) */}
-          <path
-            d="M 200 0 C 350 150, 250 350, 450 500 S 700 700, 850 800"
-            fill="none"
-            stroke="url(#riverGradient)"
-            strokeWidth="32"
-            strokeLinecap="round"
-          />
-          <path
-            d="M 200 0 C 350 150, 250 350, 450 500 S 700 700, 850 800"
-            fill="none"
-            stroke="#38bdf8"
-            strokeWidth="2"
-            strokeDasharray="10 15"
-            className="flow-line"
-          />
+    return () => {
+      map.remove();
+      mapInstanceRef.current = null;
+    };
+  }, []);
 
-          {/* Road Network Lines */}
-          <path d="M 0 320 L 1200 320" stroke="#1a2538" strokeWidth="2" />
-          <path d="M 450 0 L 450 800" stroke="#1a2538" strokeWidth="2" />
-          <path d="M 150 700 L 950 100" stroke="#1f2c42" strokeWidth="1.5" strokeDasharray="4 2" />
-          <path d="M 750 0 L 750 800" stroke="#151f30" strokeWidth="1" />
+  // Update Markers when nodes, selection, or telemetry updates
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
 
-          {/* District Boundary Polygons */}
-          <polygon
-            points="300,180 520,240 600,420 380,480 260,350"
-            fill="#0f172a"
-            fillOpacity="0.4"
-            stroke="#1e293b"
-            strokeWidth="1"
-          />
-          <polygon
-            points="650,220 950,180 1050,450 800,520 620,380"
-            fill="#0f172a"
-            fillOpacity="0.4"
-            stroke="#1e293b"
-            strokeWidth="1"
-          />
+    // Clear existing markers
+    Object.values(markersRef.current).forEach(m => m.remove());
+    markersRef.current = {};
 
-          {/* Node Coordinates Mapping */}
-          {/* Node 1: SJ-001 at (460, 310) */}
-          {/* Node 2: SJ-002 at (380, 180) */}
-          {/* Node 3: SJ-003 at (760, 420) */}
-          {filteredNodes.map((node, i) => {
-            const coords = [
-              { x: 460, y: 310 },
-              { x: 340, y: 190 },
-              { x: 740, y: 440 },
-            ][i % 3];
+    nodes.forEach(node => {
+      const isSelected = node.node_id === selectedNodeId;
+      const isClogged = node.filter_clogged_percent > 75;
 
-            const isSelected = node.node_id === selectedNodeId;
-
-            return (
-              <g
-                key={node.node_id}
-                className="cursor-pointer"
-                onClick={() => onSelectNode(node.node_id)}
-              >
-                {/* Radar pulse around active node */}
-                <circle
-                  cx={coords.x}
-                  cy={coords.y}
-                  r={isSelected ? 48 : 24}
-                  fill="url(#radarSweep)"
-                  className="animate-pulse"
-                />
-                <circle
-                  cx={coords.x}
-                  cy={coords.y}
-                  r={isSelected ? 18 : 12}
-                  fill={isSelected ? '#0284c7' : '#0f172a'}
-                  stroke={isSelected ? '#38bdf8' : '#334155'}
-                  strokeWidth="2.5"
-                />
-                <circle
-                  cx={coords.x}
-                  cy={coords.y}
-                  r="4"
-                  fill={isSelected ? '#ffffff' : '#38bdf8'}
-                />
-
-                {/* Node Label on Map */}
-                <rect
-                  x={coords.x + 18}
-                  y={coords.y - 14}
-                  width="110"
-                  height="26"
-                  rx="6"
-                  fill="#0d1424"
-                  stroke={isSelected ? '#38bdf8' : '#1e293b'}
-                  strokeWidth="1.2"
-                />
-                <text
-                  x={coords.x + 28}
-                  y={coords.y + 3}
-                  className="fill-slate-200 text-[11px] font-mono font-bold"
-                >
-                  {node.node_id}
-                </text>
-                <circle
-                  cx={coords.x + 114}
-                  cy={coords.y - 1}
-                  r="3.5"
-                  fill={node.location.verified ? '#10b981' : '#f59e0b'}
-                />
-              </g>
-            );
-          })}
-        </svg>
-      </div>
-
-      {/* Floating Node Inspector Card (Left overlay) */}
-      <div
-        className="absolute top-6 left-6 w-96 max-w-[calc(100vw-3rem)] z-10 bg-[#0d1422]/95 backdrop-blur-xl border border-[#202d42] rounded-2xl shadow-2xl overflow-hidden"
-      >
-        {/* Node Card Header */}
-        <div className="p-4 border-b border-[#1b263a] bg-gradient-to-r from-sky-950/40 to-transparent flex items-start justify-between">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
-                {selectedNode.node_id}
-              </span>
-              <span
-                className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                  selectedNode.location.verified
-                    ? 'bg-emerald-950 text-emerald-400 border-emerald-800'
-                    : 'bg-amber-950 text-amber-400 border-amber-800'
-                }`}
-              >
-                {selectedNode.location.verified ? 'LOCATION VERIFIED' : 'PENDING SURVEY'}
-              </span>
-            </div>
-            <h3 className="text-base font-bold text-slate-100 mt-1.5">{selectedNode.name}</h3>
-            <p className="text-xs text-slate-400 flex items-center gap-1 mt-0.5">
-              <MapPin className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-              <span className="truncate">{selectedNode.address || 'Surveyed coordinates'}</span>
-            </p>
+      // Custom pulsing HTML marker
+      const markerHtml = `
+        <div class="relative cursor-pointer group" style="transform: translate(-50%, -50%);">
+          <div class="w-10 h-10 rounded-full flex items-center justify-center ${
+            isSelected
+              ? 'bg-cyan-500 shadow-lg shadow-cyan-500/50 ring-4 ring-cyan-300/40 animate-pulse'
+              : isClogged
+              ? 'bg-rose-500 shadow-lg shadow-rose-500/40 ring-2 ring-rose-300/40'
+              : 'bg-blue-600 shadow-md ring-2 ring-blue-400/30'
+          }">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"></path>
+            </svg>
+          </div>
+          <div class="absolute -bottom-6 left-1/2 -translate-x-1/2 whitespace-nowrap bg-[#0b1329] text-white text-[11px] font-mono font-bold px-2 py-0.5 rounded-md border border-[#233d73] shadow-md pointer-events-none">
+            ${node.node_id}
           </div>
         </div>
+      `;
 
-        {/* GPS Coordinates Section */}
-        <div className="px-4 py-2.5 bg-[#090e18] border-b border-[#1b263a] flex items-center justify-between text-xs font-mono">
-          <div className="text-slate-400">
-            LAT: <span className="text-slate-200">{selectedNode.location.latitude.toFixed(4)}° N</span>
+      const customIcon = L.divIcon({
+        html: markerHtml,
+        className: 'custom-sujal-marker',
+        iconSize: [40, 40],
+        iconAnchor: [20, 20],
+      });
+
+      const marker = L.marker([node.location.latitude, node.location.longitude], { icon: customIcon });
+
+      // Detailed Popup with all metrics
+      const popupContent = `
+        <div style="min-width: 280px; padding: 16px; font-family: 'Plus Jakarta Sans', system-ui, sans-serif;">
+          <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #233d73; padding-bottom: 10px; margin-bottom: 12px;">
+            <div>
+              <span style="font-family: monospace; font-size: 11px; font-weight: 800; background: #082f49; color: #38bdf8; padding: 2px 8px; border-radius: 6px; border: 1px solid #0284c7;">
+                ${node.node_id}
+              </span>
+              <h4 style="font-size: 14px; font-weight: 800; color: #ffffff; margin-top: 6px; margin-bottom: 2px;">
+                ${node.name}
+              </h4>
+              <p style="font-size: 11px; color: #94a3b8; margin: 0;">${node.zone} • ${node.address || ''}</p>
+            </div>
           </div>
-          <div className="text-slate-400">
-            LON: <span className="text-slate-200">{selectedNode.location.longitude.toFixed(4)}° E</span>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; font-family: monospace;">
+            <div style="background: #15244d; padding: 8px; border-radius: 8px; border: 1px solid #254278;">
+              <div style="font-size: 10px; color: #94a3b8;">pH Level</div>
+              <div style="font-size: 16px; font-weight: 800; color: #00f0ff;">
+                ${isSelected && latestReading ? latestReading.measurements.ph.toFixed(2) : '7.20'}
+              </div>
+            </div>
+
+            <div style="background: #15244d; padding: 8px; border-radius: 8px; border: 1px solid #254278;">
+              <div style="font-size: 10px; color: #94a3b8;">Turbidity</div>
+              <div style="font-size: 16px; font-weight: 800; color: #38bdf8;">
+                ${isSelected && latestReading ? latestReading.measurements.turbidity_ntu.toFixed(2) : '5.50'} <span style="font-size: 10px; color: #94a3b8;">NTU</span>
+              </div>
+            </div>
+
+            <div style="background: #15244d; padding: 8px; border-radius: 8px; border: 1px solid #254278;">
+              <div style="font-size: 10px; color: #94a3b8;">Temperature</div>
+              <div style="font-size: 15px; font-weight: 800; color: #fbbf24;">
+                ${isSelected && latestReading ? latestReading.measurements.temperature_c.toFixed(1) : '24.6'} °C
+              </div>
+            </div>
+
+            <div style="background: #15244d; padding: 8px; border-radius: 8px; border: 1px solid #254278;">
+              <div style="font-size: 10px; color: #94a3b8;">Filter Clogged</div>
+              <div style="font-size: 15px; font-weight: 800; color: ${node.filter_clogged_percent > 75 ? '#f43f5e' : '#34d399'};">
+                ${node.filter_clogged_percent}%
+              </div>
+            </div>
           </div>
-          <span className="text-[10px] uppercase font-bold text-cyan-400 bg-cyan-950/80 px-1.5 py-0.5 rounded">
-            {selectedNode.location.source}
+
+          <div style="background: #091228; padding: 8px 10px; border-radius: 8px; border: 1px solid #1a2f55; font-size: 11px; margin-bottom: 12px; display: flex; justify-content: space-between;">
+            <span style="color: #94a3b8;">GPS Coordinates:</span>
+            <span style="color: #e2e8f0; font-family: monospace;">
+              ${node.location.latitude.toFixed(4)}° N, ${node.location.longitude.toFixed(4)}° E
+            </span>
+          </div>
+
+          <button id="select-node-btn-${node.node_id}" style="width: 100%; padding: 8px; background: linear-gradient(to right, #06b6d4, #2563eb); color: white; font-weight: 700; font-size: 12px; border-radius: 8px; border: none; cursor: pointer;">
+            ${isSelected ? 'Active Telemetry Station' : 'Select This Station'}
+          </button>
+        </div>
+      `;
+
+      marker.bindPopup(popupContent, { maxWidth: 320 });
+
+      marker.on('click', () => {
+        onSelectNode(node.node_id);
+      });
+
+      marker.on('popupopen', () => {
+        const btn = document.getElementById(`select-node-btn-${node.node_id}`);
+        if (btn) {
+          btn.onclick = () => {
+            onSelectNode(node.node_id);
+          };
+        }
+      });
+
+      marker.addTo(map);
+      markersRef.current[node.node_id] = marker;
+    });
+
+    // If selected node changes, pan smoothly
+    const sel = nodes.find(n => n.node_id === selectedNodeId);
+    if (sel) {
+      map.panTo([sel.location.latitude, sel.location.longitude], { animate: true });
+    }
+  }, [nodes, selectedNodeId, latestReading]);
+
+  return (
+    <div className="relative w-full h-[calc(100vh-5rem)] overflow-hidden bg-[#0b1329]">
+      {/* Full-bleed Real Leaflet Map Container (Initially ONLY the Map is visible with node markers) */}
+      <div ref={mapContainerRef} className="w-full h-full z-0" />
+
+      {/* Floating Top Controls */}
+      <div className="absolute top-5 left-5 z-[500] flex items-center gap-3">
+        <div className="bg-[#0c1633]/90 backdrop-blur-md px-4 py-2.5 rounded-xl border border-[#233d73] shadow-xl flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping" />
+            <span className="text-xs font-bold text-white uppercase tracking-wider font-mono">
+              Live Satellite / Carto Map
+            </span>
+          </div>
+          <span className="text-xs text-slate-400">|</span>
+          <span className="text-xs text-cyan-300 font-mono">
+            {nodes.length} Stations Active
           </span>
         </div>
 
-        {/* Live Telemetry Preview in Card */}
-        {latestReading && (
-          <div className="p-4 space-y-3">
-            <div className="text-[11px] uppercase font-bold tracking-wider text-slate-400 flex items-center justify-between">
-              <span>Live Sensor Values</span>
-              <span className="text-emerald-400 flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                ONLINE
-              </span>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2">
-              <div className="bg-[#121927] border border-[#1f2b3f] rounded-lg p-2.5">
-                <div className="text-[10px] text-slate-400 flex items-center justify-between">
-                  <span>pH Value</span>
-                  <Activity className="w-3 h-3 text-cyan-400" />
-                </div>
-                <div className="text-lg font-bold font-mono text-slate-100 mt-1">
-                  {latestReading.measurements.ph.toFixed(2)}
-                </div>
-                <div className="mt-1">
-                  <Sparkline data={phHistory} color="#0ea5e9" width={70} height={20} />
-                </div>
-              </div>
-
-              <div className="bg-[#121927] border border-[#1f2b3f] rounded-lg p-2.5">
-                <div className="text-[10px] text-slate-400 flex items-center justify-between">
-                  <span>Turbidity</span>
-                  <Droplets className="w-3 h-3 text-sky-400" />
-                </div>
-                <div className="text-lg font-bold font-mono text-slate-100 mt-1">
-                  {latestReading.measurements.turbidity_ntu.toFixed(2)} <span className="text-[10px] font-normal text-slate-400">NTU</span>
-                </div>
-                <div className="mt-1">
-                  <Sparkline data={turbHistory} color="#38bdf8" width={70} height={20} />
-                </div>
-              </div>
-
-              <div className="bg-[#121927] border border-[#1f2b3f] rounded-lg p-2.5">
-                <div className="text-[10px] text-slate-400">Temperature</div>
-                <div className="text-base font-bold font-mono text-slate-100 mt-1">
-                  {latestReading.measurements.temperature_c.toFixed(1)} °C
-                </div>
-              </div>
-
-              <div className="bg-[#121927] border border-[#1f2b3f] rounded-lg p-2.5">
-                <div className="text-[10px] text-slate-400">Branch Flow</div>
-                <div className="text-base font-bold font-mono text-slate-100 mt-1">
-                  {latestReading.measurements.flow_lpm.branch_a.toFixed(2)} LPM
-                </div>
-              </div>
-            </div>
-
-            <div className="pt-2 border-t border-[#1b263a] flex items-center justify-between text-xs text-slate-400">
-              <span>Sequence Phase:</span>
-              <span className="font-mono font-bold text-sky-300 uppercase">
-                {latestReading.phase} ({latestReading.run_id})
-              </span>
-            </div>
-          </div>
-        )}
+        {/* Sync My GPS Location Button */}
+        <button
+          onClick={onSyncGsmLocation}
+          disabled={isGsmSyncing}
+          className="bg-[#0c1633]/90 hover:bg-[#15274f] backdrop-blur-md px-3.5 py-2.5 rounded-xl border border-[#233d73] shadow-xl flex items-center gap-2 text-xs font-semibold text-cyan-300 transition-colors"
+        >
+          <Compass className={`w-4 h-4 text-cyan-400 ${isGsmSyncing ? 'animate-spin text-amber-400' : ''}`} />
+          <span>{isGsmSyncing ? 'Locating...' : 'Sync Laptop GPS'}</span>
+        </button>
       </div>
 
-      {/* Top Right Floating Controls */}
-      <div className="absolute top-6 right-6 z-10 flex items-center gap-2">
-        <div className="bg-[#0d1422]/90 backdrop-blur-md border border-[#202d42] rounded-xl p-1 flex items-center gap-1 shadow-xl">
-          <button
-            onClick={() => setFilter('all')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-              filter === 'all' ? 'bg-cyan-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            All Nodes ({nodes.length})
-          </button>
-          <button
-            onClick={() => setFilter('verified')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-              filter === 'verified' ? 'bg-cyan-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            Verified Only
-          </button>
-        </div>
-
-        {/* Zoom Controls */}
-        <div className="bg-[#0d1422]/90 backdrop-blur-md border border-[#202d42] rounded-xl p-1 flex items-center shadow-xl">
-          <button
-            onClick={() => setZoomLevel(prev => Math.min(prev + 0.2, 1.8))}
-            className="p-2 hover:bg-slate-800 rounded-lg text-slate-300 font-bold"
-            title="Zoom In"
-          >
-            +
-          </button>
-          <button
-            onClick={() => setZoomLevel(prev => Math.max(prev - 0.2, 0.8))}
-            className="p-2 hover:bg-slate-800 rounded-lg text-slate-300 font-bold"
-            title="Zoom Out"
-          >
-            −
-          </button>
-        </div>
+      {/* Quick Station Switcher Pill Bar (Bottom Center) */}
+      <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-[500] bg-[#0c1633]/95 backdrop-blur-md p-1.5 rounded-2xl border border-[#233d73] shadow-2xl flex items-center gap-1.5 max-w-[95vw] overflow-x-auto">
+        {nodes.map(n => {
+          const isSelected = n.node_id === selectedNodeId;
+          return (
+            <button
+              key={n.node_id}
+              onClick={() => {
+                onSelectNode(n.node_id);
+                markersRef.current[n.node_id]?.openPopup();
+              }}
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold font-mono transition-all flex items-center gap-2 whitespace-nowrap ${
+                isSelected
+                  ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-lg shadow-cyan-500/30'
+                  : 'text-slate-300 hover:text-white hover:bg-[#15274f]'
+              }`}
+            >
+              <span className={`w-2 h-2 rounded-full ${isSelected ? 'bg-white' : 'bg-cyan-400'}`} />
+              <span>{n.node_id}</span>
+              <span className="text-[10px] font-sans font-normal opacity-80 truncate max-w-[120px]">
+                {n.name}
+              </span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
