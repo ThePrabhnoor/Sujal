@@ -264,11 +264,10 @@ export const App: React.FC = () => {
   const intervalSeconds = completeness?.expected_interval_seconds;
   const packetAgeSeconds = completeness?.latest_packet_age_seconds;
   const isNodeOnline = Boolean(
-    latestReading &&
-    intervalSeconds &&
-    packetAgeSeconds !== null && packetAgeSeconds !== undefined &&
-    packetAgeSeconds <= intervalSeconds * 2 &&
-    completeness?.status !== 'stale'
+    latestReading && (
+      (packetAgeSeconds !== null && packetAgeSeconds !== undefined && packetAgeSeconds <= 300) ||
+      (latestReading.timestamp && Math.abs(Date.now() - new Date(latestReading.timestamp).getTime()) <= 300000)
+    )
   );
   const activeBranch = latestReading?.active_branch || 'unknown';
   const selectedNode = nodes.find(n => n.node_id === selectedNodeId) || nodes[0] || {

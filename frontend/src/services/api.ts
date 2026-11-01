@@ -158,14 +158,22 @@ class ApiService {
   }
 
   async getNodeAlerts(nodeId: string, status: 'open' | 'acknowledged' | 'resolved' | 'all' = 'all'): Promise<AlertItem[]> {
-    const data = await requestJson<JsonObject>(`/v1/nodes/${encodeURIComponent(nodeId)}/alerts?status=${status}`);
-    return (data.alerts || []).map(normalizeAlert);
+    try {
+      const data = await requestJson<JsonObject>(`/v1/nodes/${encodeURIComponent(nodeId)}/alerts?status=${status}`);
+      return (data.alerts || []).map(normalizeAlert);
+    } catch {
+      return [];
+    }
   }
 
   async getAllAbnormalities(): Promise<AlertItem[]> {
-    const nodes = await this.listNodes();
-    const all = await Promise.all(nodes.map(node => this.getNodeAlerts(node.node_id, 'all')));
-    return all.flat();
+    try {
+      const nodes = await this.listNodes();
+      const all = await Promise.all(nodes.map(node => this.getNodeAlerts(node.node_id, 'all')));
+      return all.flat();
+    } catch {
+      return [];
+    }
   }
 
   async updateAlertStatus(alertId: string, status: 'acknowledged' | 'resolved'): Promise<void> {
@@ -176,45 +184,57 @@ class ApiService {
     });
   }
 
-  async getRunComparison(nodeId: string, runId: string): Promise<RunComparison> {
-    const data = await requestJson<JsonObject>(`/v1/nodes/${encodeURIComponent(nodeId)}/runs/${encodeURIComponent(runId)}/comparison`);
-    return {
-      node_id: data.node_id,
-      run_id: data.run_id,
-      status: data.status,
-      received: data.received,
-      comparisons: data.comparisons || {},
-      turbidity_reduction_pct: data.turbidity_reduction_pct ?? null,
-      note: data.note,
-    };
+  async getRunComparison(nodeId: string, runId: string): Promise<RunComparison | null> {
+    try {
+      const data = await requestJson<JsonObject>(`/v1/nodes/${encodeURIComponent(nodeId)}/runs/${encodeURIComponent(runId)}/comparison`);
+      return {
+        node_id: data.node_id,
+        run_id: data.run_id,
+        status: data.status,
+        received: data.received,
+        comparisons: data.comparisons || {},
+        turbidity_reduction_pct: data.turbidity_reduction_pct ?? null,
+        note: data.note,
+      };
+    } catch {
+      return null;
+    }
   }
 
   async getMonthlyArchives(nodeId: string): Promise<MonthlyArchive[]> {
-    const data = await requestJson<JsonObject>(`/v1/nodes/${encodeURIComponent(nodeId)}/archives`);
-    return (data.archives || []).map((item: JsonObject) => ({
-      month: item.month,
-      count: item.readings_count,
-      first_timestamp: item.first_reading_at,
-      last_timestamp: item.last_reading_at,
-      download_url: `${BASE_URL}/v1/nodes/${encodeURIComponent(nodeId)}/archives/${encodeURIComponent(item.month)}.csv`,
-    }));
+    try {
+      const data = await requestJson<JsonObject>(`/v1/nodes/${encodeURIComponent(nodeId)}/archives`);
+      return (data.archives || []).map((item: JsonObject) => ({
+        month: item.month,
+        count: item.readings_count,
+        first_timestamp: item.first_reading_at,
+        last_timestamp: item.last_reading_at,
+        download_url: `${BASE_URL}/v1/nodes/${encodeURIComponent(nodeId)}/archives/${encodeURIComponent(item.month)}.csv`,
+      }));
+    } catch {
+      return [];
+    }
   }
 
-  async getCompleteness(nodeId: string): Promise<CompletenessMetrics> {
-    const data = await requestJson<JsonObject>(`/v1/nodes/${encodeURIComponent(nodeId)}/telemetry-completeness`);
-    return {
-      node_id: data.node_id,
-      status: data.status,
-      completeness_percent: data.completeness_pct ?? null,
-      expected_interval_seconds: data.expected_interval_seconds ?? null,
-      received_packets: data.received_packets ?? null,
-      raw_packets: data.raw_packets ?? null,
-      duplicate_or_burst_packets: data.duplicate_or_burst_packets ?? null,
-      expected_packets: data.expected_packets ?? null,
-      window_seconds: data.window_seconds ?? null,
-      latest_packet_age_seconds: data.latest_packet_age_seconds ?? null,
-      note: data.note,
-    };
+  async getCompleteness(nodeId: string): Promise<CompletenessMetrics | null> {
+    try {
+      const data = await requestJson<JsonObject>(`/v1/nodes/${encodeURIComponent(nodeId)}/telemetry-completeness`);
+      return {
+        node_id: data.node_id,
+        status: data.status,
+        completeness_percent: data.completeness_pct ?? null,
+        expected_interval_seconds: data.expected_interval_seconds ?? null,
+        received_packets: data.received_packets ?? null,
+        raw_packets: data.raw_packets ?? null,
+        duplicate_or_burst_packets: data.duplicate_or_burst_packets ?? null,
+        expected_packets: data.expected_packets ?? null,
+        window_seconds: data.window_seconds ?? null,
+        latest_packet_age_seconds: data.latest_packet_age_seconds ?? null,
+        note: data.note,
+      };
+    } catch {
+      return null;
+    }
   }
 
   async getSixHourAverages(nodeId: string, date?: string): Promise<SixHourAverages> {

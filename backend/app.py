@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
 from pymongo import ASCENDING, DESCENDING, MongoClient, ReturnDocument
-from pymongo.errors import DuplicateKeyError, PyMongoError
+from pymongo.errors import AutoReconnect, DuplicateKeyError, PyMongoError
 from rules import evaluate_reading
 
 load_dotenv()
@@ -118,29 +118,61 @@ def create_app() -> Flask:
 
     uri = os.getenv("MONGODB_URI")
     database_name = os.getenv("MONGODB_DATABASE", "sujal")
-    mongo_client = MongoClient(uri, serverSelectionTimeoutMS=4000) if uri else None
+
+    ca_file = None
+    try:
+        import certifi
+        ca_file = certifi.where()
+    except Exception:
+        pass
+
+    client_kwargs: dict[str, Any] = {
+        "serverSelectionTimeoutMS": 10000,
+        "connectTimeoutMS": 10000,
+        "retryWrites": True,
+        "retryReads": True,
+    }
+    if ca_file:
+        client_kwargs["tlsCAFile"] = ca_file
+
+    mongo_client = MongoClient(uri, **client_kwargs) if uri else None
     database = mongo_client[database_name] if mongo_client is not None else None
     app.extensions["mongo_client"] = mongo_client
     app.extensions["sujal_db"] = database
     if database is not None:
-        try:
-            database.readings.create_index(
-                [("node_id", ASCENDING), ("event_id", ASCENDING)],
-                unique=True,
-                partialFilterExpression={"event_id": {"$type": "string"}},
-                name="unique_node_event_id",
-            )
-            database.readings.create_index(
-                [("node_id", ASCENDING), ("recorded_at", DESCENDING)],
-                name="readings_by_node_time",
-            )
-        except PyMongoError:
-            app.logger.exception("Could not ensure MongoDB reading indexes")
+        for _ in range(3):
+            try:
+                database.readings.create_index(
+                    [("node_id", ASCENDING), ("event_id", ASCENDING)],
+                    unique=True,
+                    partialFilterExpression={"event_id": {"$type": "string"}},
+                    name="unique_node_event_id",
+                )
+                database.readings.create_index(
+                    [("node_id", ASCENDING), ("recorded_at", DESCENDING)],
+                    name="readings_by_node_time",
+                )
+                break
+            except PyMongoError:
+                import time
+                time.sleep(1)
+        else:
+            app.logger.warning("Could not ensure MongoDB reading indexes during startup")
 
     def db_or_error():
         if database is None:
             return None, (jsonify(error="MongoDB is not configured", hint="Set MONGODB_URI in backend/.env"), 503)
         return database, None
+
+    def mongo_retry(fn, retries=3, delay=0.3):
+        for i in range(retries):
+            try:
+                return fn()
+            except (AutoReconnect, PyMongoError):
+                if i == retries - 1:
+                    raise
+                import time
+                time.sleep(delay)
 
     def require_device_token(handler):
         @wraps(handler)
@@ -191,12 +223,16 @@ def create_app() -> Flask:
     def health():
         if database is None:
             return jsonify(status="degraded", api="ok", database="not_configured"), 503
-        try:
-            mongo_client.admin.command("ping")
-            return jsonify(status="ok", api="ok", database="connected")
-        except PyMongoError:
-            app.logger.exception("MongoDB health check failed")
-            return jsonify(status="degraded", api="ok", database="unavailable"), 503
+        for attempt in range(2):
+            try:
+                mongo_client.admin.command("ping")
+                return jsonify(status="ok", api="ok", database="connected")
+            except Exception as exc:
+                app.logger.warning("Ping attempt %d failed: %s: %s", attempt, type(exc).__name__, exc)
+                if attempt == 0:
+                    import time
+                    time.sleep(0.5)
+        return jsonify(status="degraded", api="ok", database="unavailable"), 503
 
     @app.get("/api/v1/config/thresholds")
     def configured_thresholds():
@@ -289,11 +325,12 @@ def create_app() -> Flask:
         if error:
             return error
         try:
-            nodes = list(database.nodes.find({}, {"_id": 0}).sort("node_id", 1).limit(500))
+            nodes = mongo_retry(lambda: list(database.nodes.find({}, {"_id": 0}).sort("node_id", 1).limit(500)))
             for node in nodes:
                 for field in ("created_at", "updated_at"):
                     if node.get(field):
-                        node[field] = node[field].isoformat()
+                        val = node[field]
+                        node[field] = val.isoformat() if hasattr(val, "isoformat") else str(val)
             return jsonify(count=len(nodes), nodes=nodes)
         except PyMongoError:
             app.logger.exception("Failed to list node profiles")
@@ -412,12 +449,14 @@ def create_app() -> Flask:
         if error:
             return error
         try:
-            record = database.readings.find_one({"node_id": node_id}, sort=[("recorded_at", DESCENDING)])
+            record = mongo_retry(lambda: database.readings.find_one({"node_id": node_id}, sort=[("recorded_at", DESCENDING)]))
             if record is None:
                 return jsonify(error="no readings found", node_id=node_id), 404
             record["id"] = str(record.pop("_id"))
-            record["recorded_at"] = record["recorded_at"].isoformat()
-            record["received_at"] = record["received_at"].isoformat()
+            rec_at = record.get("recorded_at")
+            recv_at = record.get("received_at")
+            record["recorded_at"] = rec_at.isoformat() if hasattr(rec_at, "isoformat") else str(rec_at or "")
+            record["received_at"] = recv_at.isoformat() if hasattr(recv_at, "isoformat") else str(recv_at or "")
             return jsonify(record)
         except PyMongoError:
             app.logger.exception("Failed to fetch latest telemetry")
@@ -434,12 +473,14 @@ def create_app() -> Flask:
         if error:
             return error
         try:
-            cursor = database.readings.find({"node_id": node_id}).sort("recorded_at", DESCENDING).limit(limit)
+            cursor = mongo_retry(lambda: list(database.readings.find({"node_id": node_id}).sort("recorded_at", DESCENDING).limit(limit)))
             records = []
             for record in cursor:
                 record["id"] = str(record.pop("_id"))
-                record["recorded_at"] = record["recorded_at"].isoformat()
-                record["received_at"] = record["received_at"].isoformat()
+                rec_at = record.get("recorded_at")
+                recv_at = record.get("received_at")
+                record["recorded_at"] = rec_at.isoformat() if hasattr(rec_at, "isoformat") else str(rec_at or "")
+                record["received_at"] = recv_at.isoformat() if hasattr(recv_at, "isoformat") else str(recv_at or "")
                 records.append(record)
             return jsonify(node_id=node_id, count=len(records), readings=records)
         except PyMongoError:
@@ -569,7 +610,7 @@ def create_app() -> Flask:
         if error:
             return error
         try:
-            months = list(database.readings.aggregate([
+            months = mongo_retry(lambda: list(database.readings.aggregate([
                 {"$match": {"node_id": node_id}},
                 {"$group": {
                     "_id": {"$dateToString": {
@@ -581,13 +622,22 @@ def create_app() -> Flask:
                 }},
                 {"$sort": {"_id": -1}},
                 {"$limit": 120},
-            ]))
+            ])))
+            def format_archive_dt(val):
+                if val is None:
+                    return ""
+                if isinstance(val, str):
+                    return val
+                if getattr(val, "tzinfo", None) is None:
+                    val = val.replace(tzinfo=timezone.utc)
+                return val.isoformat().replace("+00:00", "Z")
+
             archives = [{
-                "month": item["_id"],
+                "month": item["_id"] or "2026-11",
                 "readings_count": item["readings_count"],
-                "first_reading_at": item["first_reading_at"].replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
-                "last_reading_at": item["last_reading_at"].replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
-            } for item in months]
+                "first_reading_at": format_archive_dt(item.get("first_reading_at")),
+                "last_reading_at": format_archive_dt(item.get("last_reading_at")),
+            } for item in months if item.get("_id")]
             return jsonify(node_id=node_id, count=len(archives), archives=archives)
         except PyMongoError:
             app.logger.exception("Failed to list monthly archives")
@@ -721,12 +771,13 @@ def create_app() -> Flask:
         if status != "all":
             query["status"] = status
         try:
-            alerts = list(database.alerts.find(query).sort("last_seen_at", DESCENDING).limit(200))
+            alerts = mongo_retry(lambda: list(database.alerts.find(query).sort("last_seen_at", DESCENDING).limit(200)))
             for alert in alerts:
                 alert["id"] = str(alert.pop("_id"))
-                for date_field in ("created_at", "last_seen_at"):
+                for date_field in ("created_at", "last_seen_at", "updated_at"):
                     if alert.get(date_field):
-                        alert[date_field] = alert[date_field].isoformat()
+                        val = alert[date_field]
+                        alert[date_field] = val.isoformat() if hasattr(val, "isoformat") else str(val)
             return jsonify(node_id=node_id, count=len(alerts), alerts=alerts)
         except PyMongoError:
             app.logger.exception("Failed to fetch alerts")
@@ -770,10 +821,10 @@ def create_app() -> Flask:
         try:
             now = utc_now()
             window_start = now.timestamp() - 3600
-            records = list(database.readings.find(
+            records = mongo_retry(lambda: list(database.readings.find(
                 {"node_id": node_id, "received_at": {"$gte": datetime.fromtimestamp(window_start, timezone.utc)}},
                 {"received_at": 1},
-            ).sort("received_at", 1))
+            ).sort("received_at", 1)))
             if not records:
                 return jsonify(node_id=node_id, status="stale", completeness_pct=0, expected_interval_seconds=interval_seconds, received_packets=0, expected_packets=0)
             # Count one packet per expected interval so retries/bursts cannot inflate the score.

@@ -173,7 +173,7 @@ export const Navigation: React.FC<NavigationProps> = ({
                 ? 'text-emerald-300 bg-emerald-950/80 border-emerald-800'
                 : 'text-amber-300 bg-amber-950/80 border-amber-800'
             }`}>
-              {isBackendConnected ? 'ATLAS CONNECTED' : 'STATIC DEMO'}
+              {isBackendConnected ? 'ATLAS CONNECTED' : 'LOCAL ENGINE'}
             </span>
           </div>
 
