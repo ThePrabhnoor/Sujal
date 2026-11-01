@@ -17,7 +17,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${BASE_URL}${path}`, {
     ...init,
     headers: { Accept: 'application/json', ...(init?.headers || {}) },
-    signal: init?.signal || AbortSignal.timeout(8000),
+    signal: init?.signal || AbortSignal.timeout(15000),
   });
   const contentType = response.headers.get('content-type') || '';
   const body: any = contentType.includes('application/json')

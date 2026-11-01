@@ -118,7 +118,7 @@ def create_app() -> Flask:
     CORS(app, resources={r"/api/*": {"origins": origins}})
 
     uri = os.getenv("MONGODB_URI")
-    database_name = os.getenv("MONGODB_DATABASE", "sujal")
+    database_name = os.getenv("MONGODB_DATABASE", "Sujal")
 
     ca_file = None
     try:
@@ -128,8 +128,10 @@ def create_app() -> Flask:
         pass
 
     client_kwargs: dict[str, Any] = {
-        "serverSelectionTimeoutMS": 10000,
-        "connectTimeoutMS": 10000,
+        "serverSelectionTimeoutMS": 5000,
+        "connectTimeoutMS": 5000,
+        "socketTimeoutMS": 10000,
+        "maxIdleTimeMS": 45000,
         "retryWrites": True,
         "retryReads": True,
     }
@@ -234,7 +236,7 @@ def create_app() -> Flask:
             return jsonify(status="degraded", api="ok", database="not_configured"), 503
         for attempt in range(2):
             try:
-                mongo_client.admin.command("ping")
+                database.command("ping")
                 return jsonify(status="ok", api="ok", database="connected")
             except Exception as exc:
                 app.logger.warning("Ping attempt %d failed: %s: %s", attempt, type(exc).__name__, exc)

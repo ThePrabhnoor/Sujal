@@ -194,30 +194,42 @@ export const App: React.FC = () => {
     }
   }, []);
 
-  // Fetch registered nodes directly from backend database
-  useEffect(() => {
-    (async () => {
-      try {
-        const [health, nodeList] = await Promise.all([api.checkHealth(), api.listNodes()]);
-        setIsBackendConnected(health.status === 'ok' && health.database === 'connected');
-        setNodes(nodeList);
-        if (nodeList.length > 0) {
-          setSelectedNodeId((current) => {
-            const exists = nodeList.some(n => n.node_id === current);
-            return exists ? current : nodeList[0].node_id;
-          });
-        } else {
+  // Fetch registered nodes & verify backend database connection
+  const fetchNodesAndHealth = useCallback(async () => {
+    try {
+      const [health, nodeList] = await Promise.all([api.checkHealth(), api.listNodes()]);
+      const backendConnected = health.status === 'ok' && health.database === 'connected';
+      setIsBackendConnected(backendConnected);
+      setNodes(nodeList);
+
+      if (nodeList.length > 0) {
+        setSelectedNodeId((current) => {
+          const exists = nodeList.some(n => n.node_id === current);
+          return exists && current ? current : nodeList[0].node_id;
+        });
+        setLoadError(null);
+      } else {
+        if (!backendConnected) {
           setSelectedNodeId('');
+          setLoadError('Backend is offline. Dashboard is showing static demo data.');
+        } else {
           setLoadError('No node is registered in the connected backend yet. Dashboard is showing static demo data.');
         }
-      } catch (err) {
-        setIsBackendConnected(false);
-        setNodes([]);
-        setSelectedNodeId('');
-        setLoadError(err instanceof Error ? err.message : 'Could not list nodes.');
       }
-    })();
+      return { backendConnected, nodeList };
+    } catch (err) {
+      setIsBackendConnected(false);
+      setNodes([]);
+      setSelectedNodeId('');
+      setLoadError(err instanceof Error ? err.message : 'Could not list nodes.');
+      return { backendConnected: false, nodeList: [] };
+    }
   }, []);
+
+  // Initial mount: load nodes and health
+  useEffect(() => {
+    void fetchNodesAndHealth();
+  }, [fetchNodesAndHealth]);
 
   // Load node data whenever active node changes
   useEffect(() => {
@@ -226,16 +238,34 @@ export const App: React.FC = () => {
     }
   }, [selectedNodeId, loadData]);
 
-  // Live telemetry polling strictly from backend (updates charts & graphs as backend receives data from ESP32)
+  // Live telemetry polling strictly from backend with self-healing auto-reconnect
   useEffect(() => {
-    if (!isStreaming || !selectedNodeId) return;
+    if (!isStreaming) return;
 
     const interval = setInterval(() => {
-      void loadData(selectedNodeId);
+      if (selectedNodeId && isBackendConnected) {
+        void loadData(selectedNodeId);
+      } else {
+        // Automatically probe and reconnect if node list is empty or backend was temporarily disconnected
+        void fetchNodesAndHealth();
+      }
     }, 3000);
 
     return () => clearInterval(interval);
-  }, [isStreaming, selectedNodeId, loadData]);
+  }, [isStreaming, selectedNodeId, isBackendConnected, loadData, fetchNodesAndHealth]);
+
+  // Comprehensive manual refresh for buttons
+  const handleFullRefresh = useCallback(async () => {
+    addSystemLog('Refreshing backend connection & node registry...', 'info');
+    const { backendConnected, nodeList } = await fetchNodesAndHealth();
+    const targetNodeId = selectedNodeId || (nodeList.length > 0 ? nodeList[0].node_id : '');
+    if (targetNodeId && backendConnected) {
+      await loadData(targetNodeId);
+      addSystemLog(`Refreshed telemetry for ${targetNodeId}`, 'success');
+    } else {
+      addSystemLog('Backend is currently offline or unreachable.', 'warn');
+    }
+  }, [fetchNodesAndHealth, selectedNodeId, loadData, addSystemLog]);
 
   // Manual Node Cycling Button handler
   const handleManualCycleNode = () => {
@@ -297,10 +327,7 @@ export const App: React.FC = () => {
             setIsStreaming(next);
             addSystemLog(next ? 'Live telemetry auto-refresh turned ON' : 'Live telemetry auto-refresh turned OFF', next ? 'success' : 'warn');
           }}
-          onRefreshReadings={() => {
-            void loadData(selectedNodeId);
-            addSystemLog('Forced manual telemetry refresh executed', 'info');
-          }}
+          onRefreshReadings={handleFullRefresh}
           isBackendConnected={isBackendConnected}
           isNodeOnline={isNodeOnline}
           activeBranch={activeBranch}
@@ -324,10 +351,7 @@ export const App: React.FC = () => {
           isGsmSyncing={isGsmSyncing}
           gsmLocationText={gsmLocationText}
           onSimulatePacket={handleSimulatePacket}
-          onRefresh={() => {
-            void loadData(selectedNodeId);
-            addSystemLog('Telemetry sensors re-polled', 'info');
-          }}
+          onRefresh={handleFullRefresh}
           lastTimestamp={latestReading?.timestamp}
           activeBranch={activeBranch}
           isBackendConnected={isBackendConnected}
@@ -384,7 +408,7 @@ export const App: React.FC = () => {
                 openAlertsCount={openAlertsCount}
                 isStreaming={isStreaming}
                 onToggleStreaming={() => setIsStreaming(!isStreaming)}
-                onRefreshReadings={() => void loadData(selectedNodeId)}
+                onRefreshReadings={handleFullRefresh}
                 isBackendConnected={isBackendConnected}
                 isNodeOnline={isNodeOnline}
                 activeBranch={activeBranch}
