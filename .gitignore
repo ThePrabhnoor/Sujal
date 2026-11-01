@@ -101,6 +101,7 @@ docker-compose.override.yml
 out/
 .parcel-cache/
 .turbo/
+.firebase/
 
 # ------------------------------------------------------------------------------
 # 6. Testing, Code Quality & Coverage
