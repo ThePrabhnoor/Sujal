@@ -19,12 +19,13 @@ import {
   ArrowDown
 } from 'lucide-react';
 import { AlertItem, MonthlyArchive, TelemetryReading } from '../../types';
+import { formatReadingValue } from '../../services/api';
 
 interface LogsAndArchiveViewProps {
   abnormalities: AlertItem[];
   archives: MonthlyArchive[];
   readings: TelemetryReading[];
-  onUpdateAlertStatus: (alertId: string, status: 'open' | 'acknowledged' | 'resolved') => void;
+  onUpdateAlertStatus: (alertId: string, status: 'acknowledged' | 'resolved') => void;
   nodeId: string;
 }
 
@@ -61,18 +62,10 @@ export const LogsAndArchiveView: React.FC<LogsAndArchiveViewProps> = ({
   });
 
   const handleDownloadCsv = (month: string) => {
-    const csvContent =
-      'data:text/csv;charset=utf-8,' +
-      'Event_ID,Node_ID,Timestamp_UTC,Phase,Active_Branch,pH,Turbidity_NTU,Temperature_C,Inlet_Flow_LPM,Branch_Flow_LPM,MQ5_ADC,Filter_Clogged_Pct\n' +
-      readings
-        .map(
-          r =>
-            `${r.event_id},${r.node_id},${r.timestamp},${r.phase},${r.active_branch},${r.measurements.ph},${r.measurements.turbidity_ntu},${r.measurements.temperature_c},${r.measurements.flow_lpm.inlet},${r.measurements.flow_lpm.branch_a},${r.measurements.mq5_adc},${r.filter_clogged_percent || 28}`
-        )
-        .join('\n');
-    const encodedUri = encodeURI(csvContent);
+    const archive = archives.find(item => item.month === month);
+    if (!archive) return;
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
+    link.setAttribute('href', archive.download_url);
     link.setAttribute('download', `sujal-${nodeId}-archive-${month}.csv`);
     document.body.appendChild(link);
     link.click();
@@ -248,7 +241,7 @@ export const LogsAndArchiveView: React.FC<LogsAndArchiveViewProps> = ({
                     {arch.count.toLocaleString()} packets
                   </td>
                   <td className="py-3.5 px-4 font-mono text-slate-300">
-                    {(arch.size_kb / 1024).toFixed(1)} MB
+                    {Number.isFinite(arch.size_kb) ? `${(arch.size_kb! / 1024).toFixed(1)} MB` : 'Size unavailable'}
                   </td>
                   <td className="py-3.5 px-4 font-mono text-slate-300">
                     {new Date(arch.first_timestamp).toLocaleDateString()} — {new Date(arch.last_timestamp).toLocaleDateString()}
@@ -368,26 +361,26 @@ export const LogsAndArchiveView: React.FC<LogsAndArchiveViewProps> = ({
                     </td>
 
                     <td className="py-3 px-4 font-mono font-bold text-white">
-                      {r.measurements.ph.toFixed(2)}
+                      {formatReadingValue(r.measurements.ph)}
                     </td>
 
                     <td className="py-3 px-4 font-mono font-bold">
                       <span className={r.measurements.turbidity_ntu > 5.0 && isOutlet ? 'text-rose-400 font-extrabold' : 'text-white'}>
-                        {r.measurements.turbidity_ntu.toFixed(2)} NTU
+                        {formatReadingValue(r.measurements.turbidity_ntu)} NTU
                       </span>
                     </td>
 
                     <td className="py-3 px-4 font-mono text-slate-200">
-                      {r.measurements.temperature_c.toFixed(1)} °C
+                      {formatReadingValue(r.measurements.temperature_c, 1)} °C
                     </td>
 
                     <td className="py-3 px-4 font-mono text-cyan-300">
-                      {r.measurements.flow_lpm.inlet.toFixed(1)} / {(r.active_branch === 'B' ? r.measurements.flow_lpm.branch_b : r.measurements.flow_lpm.branch_a).toFixed(1)} LPM
+                      {formatReadingValue(r.measurements.flow_lpm.inlet, 1)} / {formatReadingValue(r.active_branch === 'B' ? r.measurements.flow_lpm.branch_b : r.measurements.flow_lpm.branch_a, 1)} LPM
                     </td>
 
                     <td className="py-3 px-4 font-mono font-semibold">
-                      <span className={(r.filter_clogged_percent || 28) > 75 ? 'text-rose-400 font-bold' : 'text-emerald-300'}>
-                        {r.filter_clogged_percent || 28}%
+                      <span className={Number.isFinite(r.filter_clogged_percent) && r.filter_clogged_percent! > 75 ? 'text-rose-400 font-bold' : 'text-emerald-300'}>
+                        {Number.isFinite(r.filter_clogged_percent) ? `${formatReadingValue(r.filter_clogged_percent, 0)}%` : 'Not measured'}
                       </span>
                     </td>
 
@@ -461,29 +454,29 @@ export const LogsAndArchiveView: React.FC<LogsAndArchiveViewProps> = ({
                 <div className="space-y-2 font-mono">
                   <div className="flex justify-between py-1 border-b border-[#1b315b]">
                     <span className="text-slate-400">pH Level:</span>
-                    <span className="text-white font-bold">{selectedReading.measurements.ph.toFixed(2)}</span>
+                    <span className="text-white font-bold">{formatReadingValue(selectedReading.measurements.ph)}</span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-[#1b315b]">
                     <span className="text-slate-400">Turbidity:</span>
-                    <span className="text-white font-bold">{selectedReading.measurements.turbidity_ntu.toFixed(2)} NTU</span>
+                    <span className="text-white font-bold">{formatReadingValue(selectedReading.measurements.turbidity_ntu)} NTU</span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-[#1b315b]">
                     <span className="text-slate-400">Temperature:</span>
-                    <span className="text-white font-bold">{selectedReading.measurements.temperature_c.toFixed(1)} °C</span>
+                    <span className="text-white font-bold">{formatReadingValue(selectedReading.measurements.temperature_c, 1)} °C</span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-[#1b315b]">
                     <span className="text-slate-400">Inlet Flow Rate:</span>
-                    <span className="text-white font-bold">{selectedReading.measurements.flow_lpm.inlet.toFixed(2)} LPM</span>
+                    <span className="text-white font-bold">{formatReadingValue(selectedReading.measurements.flow_lpm.inlet)} LPM</span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-[#1b315b]">
                     <span className="text-slate-400">Active Branch Flow:</span>
                     <span className="text-white font-bold">
-                      {(selectedReading.active_branch === 'B' ? selectedReading.measurements.flow_lpm.branch_b : selectedReading.measurements.flow_lpm.branch_a).toFixed(2)} LPM
+                      {formatReadingValue(selectedReading.active_branch === 'B' ? selectedReading.measurements.flow_lpm.branch_b : selectedReading.measurements.flow_lpm.branch_a)} LPM
                     </span>
                   </div>
                   <div className="flex justify-between py-1">
                     <span className="text-slate-400">Filter Clogged Amount:</span>
-                    <span className="text-emerald-300 font-bold">{selectedReading.filter_clogged_percent || 28}%</span>
+                    <span className="text-emerald-300 font-bold">{Number.isFinite(selectedReading.filter_clogged_percent) ? `${formatReadingValue(selectedReading.filter_clogged_percent, 0)}%` : 'Not measured'}</span>
                   </div>
                 </div>
               </div>

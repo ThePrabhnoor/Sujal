@@ -13,6 +13,7 @@ import {
   MapPin
 } from 'lucide-react';
 import { NodeProfile, TelemetryReading } from '../../types';
+import { formatReadingValue } from '../../services/api';
 
 interface MapViewProps {
   nodes: NodeProfile[];
@@ -43,8 +44,9 @@ export const MapView: React.FC<MapViewProps> = ({
     if (mapInstanceRef.current) return;
 
     // Center on selected node or GSM coordinates (Delhi NCR baseline)
-    const initialLat = gsmCoords?.lat || nodes[0]?.location.latitude || 28.6139;
-    const initialLon = gsmCoords?.lon || nodes[0]?.location.longitude || 77.2090;
+    const firstLocatedNode = nodes.find(node => node.location && Number.isFinite(node.location.latitude) && Number.isFinite(node.location.longitude));
+    const initialLat = gsmCoords?.lat ?? firstLocatedNode?.location?.latitude ?? 28.6139;
+    const initialLon = gsmCoords?.lon ?? firstLocatedNode?.location?.longitude ?? 77.2090;
 
     const map = L.map(mapContainerRef.current, {
       center: [initialLat, initialLon],
@@ -78,8 +80,11 @@ export const MapView: React.FC<MapViewProps> = ({
     markersRef.current = {};
 
     nodes.forEach(node => {
+      if (!node.location || !Number.isFinite(node.location.latitude) || !Number.isFinite(node.location.longitude)) return;
+      const location = node.location;
       const isSelected = node.node_id === selectedNodeId;
-      const isClogged = node.filter_clogged_percent > 75;
+      const isClogged = Number.isFinite(node.filter_clogged_percent) && node.filter_clogged_percent! > 75;
+      const latestMeasurements = isSelected ? latestReading?.measurements : undefined;
 
       // Custom pulsing HTML marker
       const markerHtml = `
@@ -108,7 +113,7 @@ export const MapView: React.FC<MapViewProps> = ({
         iconAnchor: [20, 20],
       });
 
-      const marker = L.marker([node.location.latitude, node.location.longitude], { icon: customIcon });
+      const marker = L.marker([location.latitude, location.longitude], { icon: customIcon });
 
       // Detailed Popup with all metrics
       const popupContent = `
@@ -119,9 +124,9 @@ export const MapView: React.FC<MapViewProps> = ({
                 ${node.node_id}
               </span>
               <h4 style="font-size: 14px; font-weight: 800; color: #ffffff; margin-top: 6px; margin-bottom: 2px;">
-                ${node.name}
+                ${node.name || node.node_id}
               </h4>
-              <p style="font-size: 11px; color: #94a3b8; margin: 0;">${node.zone} • ${node.address || ''}</p>
+              <p style="font-size: 11px; color: #94a3b8; margin: 0;">${node.zone || 'Zone unset'} • ${node.address || ''}</p>
             </div>
           </div>
 
@@ -129,28 +134,28 @@ export const MapView: React.FC<MapViewProps> = ({
             <div style="background: #15244d; padding: 8px; border-radius: 8px; border: 1px solid #254278;">
               <div style="font-size: 10px; color: #94a3b8;">pH Level</div>
               <div style="font-size: 16px; font-weight: 800; color: #00f0ff;">
-                ${isSelected && latestReading ? latestReading.measurements.ph.toFixed(2) : '7.20'}
+                ${formatReadingValue(latestMeasurements?.ph)}
               </div>
             </div>
 
             <div style="background: #15244d; padding: 8px; border-radius: 8px; border: 1px solid #254278;">
               <div style="font-size: 10px; color: #94a3b8;">Turbidity</div>
               <div style="font-size: 16px; font-weight: 800; color: #38bdf8;">
-                ${isSelected && latestReading ? latestReading.measurements.turbidity_ntu.toFixed(2) : '5.50'} <span style="font-size: 10px; color: #94a3b8;">NTU</span>
+                ${formatReadingValue(latestMeasurements?.turbidity_ntu)} <span style="font-size: 10px; color: #94a3b8;">NTU</span>
               </div>
             </div>
 
             <div style="background: #15244d; padding: 8px; border-radius: 8px; border: 1px solid #254278;">
               <div style="font-size: 10px; color: #94a3b8;">Temperature</div>
               <div style="font-size: 15px; font-weight: 800; color: #fbbf24;">
-                ${isSelected && latestReading ? latestReading.measurements.temperature_c.toFixed(1) : '24.6'} °C
+                ${formatReadingValue(latestMeasurements?.temperature_c, 1)} °C
               </div>
             </div>
 
             <div style="background: #15244d; padding: 8px; border-radius: 8px; border: 1px solid #254278;">
               <div style="font-size: 10px; color: #94a3b8;">Filter Clogged</div>
-              <div style="font-size: 15px; font-weight: 800; color: ${node.filter_clogged_percent > 75 ? '#f43f5e' : '#34d399'};">
-                ${node.filter_clogged_percent}%
+              <div style="font-size: 15px; font-weight: 800; color: ${isClogged ? '#f43f5e' : '#94a3b8'};">
+                ${Number.isFinite(node.filter_clogged_percent) ? `${formatReadingValue(node.filter_clogged_percent, 0)}%` : 'Not measured'}
               </div>
             </div>
           </div>
@@ -158,7 +163,7 @@ export const MapView: React.FC<MapViewProps> = ({
           <div style="background: #091228; padding: 8px 10px; border-radius: 8px; border: 1px solid #1a2f55; font-size: 11px; margin-bottom: 12px; display: flex; justify-content: space-between;">
             <span style="color: #94a3b8;">GPS Coordinates:</span>
             <span style="color: #e2e8f0; font-family: monospace;">
-              ${node.location.latitude.toFixed(4)}° N, ${node.location.longitude.toFixed(4)}° E
+              ${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}
             </span>
           </div>
 
@@ -189,7 +194,7 @@ export const MapView: React.FC<MapViewProps> = ({
 
     // If selected node changes, pan smoothly
     const sel = nodes.find(n => n.node_id === selectedNodeId);
-    if (sel) {
+    if (sel?.location && Number.isFinite(sel.location.latitude) && Number.isFinite(sel.location.longitude)) {
       map.panTo([sel.location.latitude, sel.location.longitude], { animate: true });
     }
   }, [nodes, selectedNodeId, latestReading]);
@@ -245,7 +250,7 @@ export const MapView: React.FC<MapViewProps> = ({
               <span className={`w-2 h-2 rounded-full ${isSelected ? 'bg-white' : 'bg-cyan-400'}`} />
               <span>{n.node_id}</span>
               <span className="text-[10px] font-sans font-normal opacity-80 truncate max-w-[120px]">
-                {n.name}
+                {n.name || 'Profile not set'}
               </span>
             </button>
           );

@@ -14,9 +14,9 @@ export interface Measurements {
 }
 
 export interface DeviceStatus {
-  wifi: 'connected' | 'disconnected' | 'reconnecting';
-  valve_a: 'open' | 'closed';
-  valve_b: 'open' | 'closed';
+  wifi: string;
+  valve_a: string;
+  valve_b: string;
 }
 
 export interface TelemetryReading {
@@ -24,8 +24,8 @@ export interface TelemetryReading {
   node_id: string;
   event_id: string;
   timestamp: string;
-  active_branch: 'A' | 'B' | string;
-  phase: 'inlet' | 'outlet';
+  active_branch: 'A' | 'B' | 'none' | 'unknown' | string;
+  phase?: 'inlet' | 'outlet';
   run_id?: string;
   measurements: Measurements;
   device_status: DeviceStatus;
@@ -43,21 +43,21 @@ export interface NodeLocation {
 
 export interface NodeProfile {
   node_id: string;
-  name: string;
-  zone: string;
+  name?: string;
+  zone?: string;
   address?: string;
-  location: NodeLocation;
+  location?: NodeLocation;
   updated_at?: string;
-  filter_clogged_percent: number;
-  filter_status: 'optimal' | 'moderate' | 'clogged';
+  filter_clogged_percent?: number;
+  filter_status?: 'optimal' | 'moderate' | 'clogged';
   last_maintenance?: string;
 }
 
 export interface AlertItem {
   _id: string;
   code: string;
-  category: 'measurement' | 'environmental_sensor' | 'hardware' | 'network' | 'filter';
-  severity: 'high' | 'warning' | 'info';
+  category: string;
+  severity: string;
   title: string;
   message: string;
   node_id: string;
@@ -85,30 +85,44 @@ export interface OperatingThresholds {
 export interface RunComparison {
   node_id: string;
   run_id: string;
-  status: 'complete' | 'waiting_for_pair' | 'paired';
-  inlet?: TelemetryReading;
-  outlet?: TelemetryReading;
-  turbidity_reduction_percent?: number;
-  turbidity_reduction_pct?: number;
-  turbidity_delta_ntu?: number;
-  ph_delta?: number;
-  temp_delta_c?: number;
-  comparisons?: Record<string, any>;
+  status: 'waiting_for_pair' | 'paired' | string;
+  comparisons: Record<string, { inlet: number; outlet: number; change: number }>;
+  turbidity_reduction_pct?: number | null;
   received?: { inlet?: boolean; outlet?: boolean };
+  note?: string;
 }
 
 export interface CompletenessMetrics {
   node_id: string;
-  total_expected?: number;
-  total_received?: number;
+  status: string;
   completeness_percent: number | null;
-  missing_runs?: string[];
-  expected_interval_seconds?: number;
+  expected_interval_seconds: number | null;
   latest_packet_age_seconds?: number | null;
-  status?: string;
-  received_packets?: number;
-  expected_packets?: number;
-  duplicate_or_burst_packets?: number;
+  received_packets: number | null;
+  raw_packets: number | null;
+  expected_packets: number | null;
+  duplicate_or_burst_packets: number | null;
+  window_seconds: number | null;
+  note?: string;
+}
+
+export interface SixHourAverageBucket {
+  slot: number;
+  start: string;
+  end: string;
+  reading_count: number;
+  averages: Record<'ph' | 'turbidity_ntu' | 'temperature_c' | 'mq5_adc' | 'mq5_digital', number | null>;
+  valid_counts: Record<string, number>;
+  excluded_counts: Record<string, number>;
+  flow_lpm: Record<string, { average: number | null; valid_count: number; excluded_count: number }>;
+}
+
+export interface SixHourAverages {
+  node_id: string;
+  date: string;
+  timezone: 'Asia/Kolkata';
+  buckets: SixHourAverageBucket[];
+  validity_rules: Record<string, string>;
 }
 
 export interface MonthlyArchive {
@@ -117,7 +131,7 @@ export interface MonthlyArchive {
   first_timestamp: string;
   last_timestamp: string;
   download_url: string;
-  size_kb: number;
+  size_kb?: number;
 }
 
 export interface SystemLogEntry {

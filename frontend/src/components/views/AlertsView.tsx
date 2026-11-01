@@ -19,7 +19,7 @@ import { AlertItem, MonthlyArchive } from '../../types';
 interface AlertsViewProps {
   alerts: AlertItem[];
   archives: MonthlyArchive[];
-  onUpdateAlertStatus: (alertId: string, status: 'open' | 'acknowledged' | 'resolved') => void;
+  onUpdateAlertStatus: (alertId: string, status: 'acknowledged' | 'resolved') => void;
   nodeId: string;
 }
 

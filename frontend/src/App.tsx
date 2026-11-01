@@ -8,10 +8,10 @@ import {
   MonthlyArchive,
   OperatingThresholds,
   RunComparison,
+  CompletenessMetrics,
   SystemLogEntry
 } from './types';
 import { api } from './services/api';
-import { INITIAL_SYSTEM_LOGS } from './services/mockData';
 import { Navigation, ViewType } from './components/Navigation';
 import { Header } from './components/Header';
 import { DashboardView } from './components/views/DashboardView';
@@ -22,26 +22,27 @@ import { AlertsView } from './components/views/AlertsView';
 export const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<ViewType>('dashboard');
   const [nodes, setNodes] = useState<NodeProfile[]>([]);
-  const [selectedNodeId, setSelectedNodeId] = useState<string>('SJ-001');
+  const [selectedNodeId, setSelectedNodeId] = useState<string>('');
   const [readings, setReadings] = useState<TelemetryReading[]>([]);
   const [latestReading, setLatestReading] = useState<TelemetryReading | null>(null);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [abnormalities, setAbnormalities] = useState<AlertItem[]>([]);
   const [archives, setArchives] = useState<MonthlyArchive[]>([]);
   const [comparison, setComparison] = useState<RunComparison | null>(null);
+  const [completeness, setCompleteness] = useState<CompletenessMetrics | null>(null);
   const [thresholds, setThresholds] = useState<OperatingThresholds>(api.getThresholds());
   const [isStreaming, setIsStreaming] = useState<boolean>(true);
-  const [isBackendConnected, setIsBackendConnected] = useState<boolean>(true);
+  const [isBackendConnected, setIsBackendConnected] = useState<boolean>(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
 
   // GSM / GPS Geolocation State (Laptop Geolocation)
-  const [gsmCoords, setGsmCoords] = useState<{ lat: number; lon: number } | null>({ lat: 28.7112, lon: 77.2319 });
-  const [gsmLocationText, setGsmLocationText] = useState<string>('28.7112° N, 77.2319° E (GSM Live)');
+  const [gsmCoords, setGsmCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [gsmLocationText, setGsmLocationText] = useState<string>('Location not synced');
   const [isGsmSyncing, setIsGsmSyncing] = useState<boolean>(false);
 
   // System Logs & Elapsed Last Ingest Timer
-  const [systemLogs, setSystemLogs] = useState<SystemLogEntry[]>(INITIAL_SYSTEM_LOGS);
+  const [systemLogs, setSystemLogs] = useState<SystemLogEntry[]>([]);
   const [lastIngestEpoch, setLastIngestEpoch] = useState<number>(Date.now() - 4000);
   const [lastIngestFormatted, setLastIngestFormatted] = useState<string>('00:00:04');
 
@@ -76,30 +77,24 @@ export const App: React.FC = () => {
           const lat = parseFloat(pos.coords.latitude.toFixed(4));
           const lon = parseFloat(pos.coords.longitude.toFixed(4));
           setGsmCoords({ lat, lon });
-          const text = `${lat >= 0 ? lat + '° N' : Math.abs(lat) + '° S'}, ${lon >= 0 ? lon + '° E' : Math.abs(lon) + '° W'} (GSM Live)`;
+          const text = `${lat >= 0 ? lat + '° N' : Math.abs(lat) + '° S'}, ${lon >= 0 ? lon + '° E' : Math.abs(lon) + '° W'} (Browser GPS)`;
           setGsmLocationText(text);
-          api.updateDeviceGsmLocation({ latitude: lat, longitude: lon, accuracy_meters: pos.coords.accuracy });
           setIsGsmSyncing(false);
           addSystemLog(`Laptop GSM localized: ${lat}, ${lon} (±${Math.round(pos.coords.accuracy || 12)}m)`, 'success');
         },
         (err) => {
-          // Graceful fallback to Delhi NCR baseline
-          const lat = 28.6139;
-          const lon = 77.2090;
-          setGsmCoords({ lat, lon });
-          setGsmLocationText(`${lat}° N, ${lon}° E (Delhi NCR - GSM Est.)`);
+          setGsmCoords(null);
+          setGsmLocationText('Location unavailable');
           setIsGsmSyncing(false);
-          addSystemLog(`GSM fallback coordinates locked: ${err.message}`, 'warn');
+          addSystemLog(`Browser location unavailable: ${err.message}`, 'warn');
         },
         { timeout: 7000, enableHighAccuracy: true }
       );
     } else {
-      const lat = 28.6139;
-      const lon = 77.2090;
-      setGsmCoords({ lat, lon });
-      setGsmLocationText(`${lat}° N, ${lon}° E (Delhi NCR)`);
+      setGsmCoords(null);
+      setGsmLocationText('Location unavailable');
       setIsGsmSyncing(false);
-      addSystemLog('GSM geolocation default applied.', 'info');
+      addSystemLog('Browser geolocation is unavailable.', 'warn');
     }
   }, [addSystemLog]);
 
@@ -108,12 +103,20 @@ export const App: React.FC = () => {
     syncGsmLocation();
   }, [syncGsmLocation]);
 
-  // Sync URL Hash router with the 4 valid views
+  // Sync URL Hash router with the 4 valid views & optional node parameter
   useEffect(() => {
     const handleHash = () => {
-      const hash = window.location.hash.replace('#/', '').replace('#', '') as ViewType;
-      if (['dashboard', 'maps', 'logs-archive', 'alerts'].includes(hash)) {
-        setCurrentView(hash);
+      const fullHash = window.location.hash.replace('#/', '').replace('#', '');
+      const [view, queryStr] = fullHash.split('?');
+      if (['dashboard', 'maps', 'logs-archive', 'alerts'].includes(view)) {
+        setCurrentView(view as ViewType);
+      }
+      if (queryStr) {
+        const params = new URLSearchParams(queryStr);
+        const nodeParam = params.get('node');
+        if (nodeParam) {
+          setSelectedNodeId(nodeParam);
+        }
       }
     };
     handleHash();
@@ -126,20 +129,33 @@ export const App: React.FC = () => {
     window.location.hash = `#/${view}`;
   };
 
-  // Load telemetry data strictly from backend API for currently selected node
+  // Fetch stored telemetry. Static demo data remains isolated to DashboardView.
   const loadData = useCallback(async (nodeId: string) => {
     try {
       const health = await api.checkHealth();
-      setIsBackendConnected(health.status === 'ok' || health.mongodb_connected);
+      const backendConnected = health.status === 'ok' && health.database === 'connected';
+      setIsBackendConnected(backendConnected);
 
-      if (!nodeId) return;
+      if (!nodeId || !backendConnected) {
+        setReadings([]);
+        setLatestReading(null);
+        setAlerts([]);
+        setAbnormalities([]);
+        setArchives([]);
+        setComparison(null);
+        setCompleteness(null);
+        if (!backendConnected) setLoadError('Backend is offline. Dashboard is showing static demo data.');
+        return;
+      }
 
-      const [history, latest, alertList, abnList, archiveList] = await Promise.all([
+      const [history, latest, alertList, abnList, archiveList, telemetryCompleteness, configuredThresholds] = await Promise.all([
         api.getReadingHistory(nodeId, 60),
         api.getLatestReading(nodeId),
         api.getNodeAlerts(nodeId, 'all'),
         api.getAllAbnormalities(),
         api.getMonthlyArchives(nodeId),
+        api.getCompleteness(nodeId),
+        api.getConfiguredThresholds(),
       ]);
 
       setReadings(history);
@@ -147,11 +163,12 @@ export const App: React.FC = () => {
       setAlerts(alertList);
       setAbnormalities(abnList);
       setArchives(archiveList);
+      setCompleteness(telemetryCompleteness);
       if (latest?.run_id) {
         const cmp = await api.getRunComparison(nodeId, latest.run_id);
         setComparison(cmp);
-      }
-      setThresholds(api.getThresholds());
+      } else setComparison(null);
+      setThresholds(configuredThresholds);
       if (latest?.timestamp) {
         const parsedTime = new Date(latest.timestamp).getTime();
         if (!isNaN(parsedTime) && parsedTime > 0) {
@@ -160,6 +177,14 @@ export const App: React.FC = () => {
       }
       setLoadError(null);
     } catch (error) {
+      setIsBackendConnected(false);
+      setReadings([]);
+      setLatestReading(null);
+      setAlerts([]);
+      setAbnormalities([]);
+      setArchives([]);
+      setComparison(null);
+      setCompleteness(null);
       setLoadError(error instanceof Error ? error.message : 'Could not fetch telemetry data.');
     }
   }, []);
@@ -168,15 +193,22 @@ export const App: React.FC = () => {
   useEffect(() => {
     (async () => {
       try {
-        const nodeList = await api.listNodes();
+        const [health, nodeList] = await Promise.all([api.checkHealth(), api.listNodes()]);
+        setIsBackendConnected(health.status === 'ok' && health.database === 'connected');
         setNodes(nodeList);
         if (nodeList.length > 0) {
           setSelectedNodeId((current) => {
             const exists = nodeList.some(n => n.node_id === current);
             return exists ? current : nodeList[0].node_id;
           });
+        } else {
+          setSelectedNodeId('');
+          setLoadError('No node is registered in the connected backend yet. Dashboard is showing static demo data.');
         }
       } catch (err) {
+        setIsBackendConnected(false);
+        setNodes([]);
+        setSelectedNodeId('');
         setLoadError(err instanceof Error ? err.message : 'Could not list nodes.');
       }
     })();
@@ -207,24 +239,17 @@ export const App: React.FC = () => {
     const nextIndex = (currentIndex + 1) % nodes.length;
     const nextNode = nodes[nextIndex];
     setSelectedNodeId(nextNode.node_id);
-    addSystemLog(`Station switched to ${nextNode.node_id} (${nextNode.name})`, 'info');
+    addSystemLog(`Station switched to ${nextNode.node_id} (${nextNode.name || nextNode.node_id})`, 'info');
   };
 
   // Trigger telemetry ingest through the backend API
-  const handleSimulatePacket = async () => {
-    if (!selectedNodeId) return;
-    addSystemLog(`Sending ESP32 packet to backend ingest API for ${selectedNodeId}...`, 'info');
-    try {
-      await api.sendTelemetryToBackend(selectedNodeId);
-      await loadData(selectedNodeId);
-      addSystemLog(`Backend ingested reading for ${selectedNodeId} into MongoDB Atlas`, 'success');
-    } catch (err) {
-      addSystemLog(`Backend ingest error: ${err instanceof Error ? err.message : 'Check connection'}`, 'alert');
-    }
+  const handleSimulatePacket = () => {
+    // Never write fabricated browser values into the same collection as ESP32 telemetry.
+    addSystemLog('Static dashboard data is illustrative; no telemetry was written.', 'info');
   };
 
   // Alert status updates
-  const handleUpdateAlertStatus = async (alertId: string, status: 'open' | 'acknowledged' | 'resolved') => {
+  const handleUpdateAlertStatus = async (alertId: string, status: 'acknowledged' | 'resolved') => {
     try {
       await api.updateAlertStatus(alertId, status);
       setAlerts(await api.getNodeAlerts(selectedNodeId, 'all'));
@@ -236,17 +261,23 @@ export const App: React.FC = () => {
   };
 
   const openAlertsCount = alerts.filter(a => a.status === 'open').length;
-  const activeBranch = latestReading?.active_branch || 'A';
+  const intervalSeconds = completeness?.expected_interval_seconds;
+  const packetAgeSeconds = completeness?.latest_packet_age_seconds;
+  const isNodeOnline = Boolean(
+    latestReading &&
+    intervalSeconds &&
+    packetAgeSeconds !== null && packetAgeSeconds !== undefined &&
+    packetAgeSeconds <= intervalSeconds * 2 &&
+    completeness?.status !== 'stale'
+  );
+  const activeBranch = latestReading?.active_branch || 'unknown';
   const selectedNode = nodes.find(n => n.node_id === selectedNodeId) || nodes[0] || {
     node_id: 'SJ-001',
-    name: 'Yamuna Wazirabad Raw Intake Station',
-    zone: 'North Riverine Sector',
-    location: { latitude: 28.7112, longitude: 77.2319, source: 'gsm', verified: true },
-    filter_clogged_percent: 28,
-    filter_status: 'optimal'
+    name: 'Static demo node',
+    zone: 'Illustrative demo data',
   };
 
-  const currentFilterClogged = latestReading?.filter_clogged_percent ?? selectedNode.filter_clogged_percent ?? 28;
+  const currentFilterClogged = latestReading?.filter_clogged_percent ?? selectedNode.filter_clogged_percent ?? Number.NaN;
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#0b1329] text-slate-100 font-sans">
@@ -267,6 +298,7 @@ export const App: React.FC = () => {
             addSystemLog('Forced manual telemetry refresh executed', 'info');
           }}
           isBackendConnected={isBackendConnected}
+          isNodeOnline={isNodeOnline}
           activeBranch={activeBranch}
           lastIngestTimeFormatted={lastIngestFormatted}
           systemLogs={systemLogs}
@@ -350,6 +382,7 @@ export const App: React.FC = () => {
                 onToggleStreaming={() => setIsStreaming(!isStreaming)}
                 onRefreshReadings={() => void loadData(selectedNodeId)}
                 isBackendConnected={isBackendConnected}
+                isNodeOnline={isNodeOnline}
                 activeBranch={activeBranch}
                 lastIngestTimeFormatted={lastIngestFormatted}
                 systemLogs={systemLogs}
@@ -365,9 +398,11 @@ export const App: React.FC = () => {
             {currentView === 'dashboard' && (
               <DashboardView
                 readings={readings}
-                latestReading={latestReading}
+                latestReading={isNodeOnline ? latestReading : null}
                 thresholds={thresholds}
                 comparison={comparison}
+                completeness={completeness}
+                isNodeOnline={isNodeOnline}
                 activeNode={selectedNode}
                 onManualCycleNode={handleManualCycleNode}
                 gsmLocationText={gsmLocationText}
@@ -382,7 +417,7 @@ export const App: React.FC = () => {
                 nodes={nodes}
                 selectedNodeId={selectedNodeId}
                 onSelectNode={setSelectedNodeId}
-                latestReading={latestReading}
+                latestReading={isNodeOnline ? latestReading : null}
                 gsmCoords={gsmCoords}
                 onSyncGsmLocation={syncGsmLocation}
                 isGsmSyncing={isGsmSyncing}

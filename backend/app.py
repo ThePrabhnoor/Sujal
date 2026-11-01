@@ -9,6 +9,7 @@ from io import StringIO
 from datetime import datetime, timezone
 from functools import wraps
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, request
@@ -145,7 +146,10 @@ def create_app() -> Flask:
         @wraps(handler)
         def wrapped(*args, **kwargs):
             expected = os.getenv("DEVICE_API_TOKEN", "").strip()
-            if expected and request.headers.get("X-Device-Token", "") != expected:
+            if not expected:
+                app.logger.error("Protected device API called while DEVICE_API_TOKEN is unset")
+                return jsonify(error="device authentication is not configured"), 503
+            if request.headers.get("X-Device-Token", "") != expected:
                 return jsonify(error="unauthorized device"), 401
             return handler(*args, **kwargs)
         return wrapped
@@ -168,6 +172,7 @@ def create_app() -> Flask:
             "temperature_min_c": optional_float("TEMP_MIN_OPERATING_C", 5.0),
             "temperature_max_c": optional_float("TEMP_MAX_OPERATING_C", 40.0),
             "mq5_adc_alert_threshold": optional_float("MQ5_ADC_ALERT_THRESHOLD"),
+            "expected_interval_seconds": optional_float("EXPECTED_INTERVAL_SECONDS"),
         }
         if thresholds["ph_min"] is not None and thresholds["ph_max"] is not None and thresholds["ph_min"] >= thresholds["ph_max"]:
             raise ValueError("PH_MIN_OPERATING must be less than PH_MAX_OPERATING")
@@ -192,6 +197,18 @@ def create_app() -> Flask:
         except PyMongoError:
             app.logger.exception("MongoDB health check failed")
             return jsonify(status="degraded", api="ok", database="unavailable"), 503
+
+    @app.get("/api/v1/config/thresholds")
+    def configured_thresholds():
+        try:
+            thresholds = read_operating_thresholds()
+            interval = thresholds.get("expected_interval_seconds")
+            if interval is not None and (interval < 1 or not float(interval).is_integer()):
+                return jsonify(error="EXPECTED_INTERVAL_SECONDS must be a positive integer"), 500
+            return jsonify(thresholds=thresholds)
+        except ValueError as exc:
+            app.logger.error("Invalid operating-threshold configuration: %s", exc)
+            return jsonify(error="invalid backend threshold configuration", detail=str(exc)), 500
 
     @app.put("/api/v1/nodes/<node_id>/profile")
     @require_device_token
@@ -428,6 +445,122 @@ def create_app() -> Flask:
         except PyMongoError:
             app.logger.exception("Failed to fetch telemetry history")
             return jsonify(error="failed to fetch readings"), 503
+
+    @app.get("/api/v1/nodes/<node_id>/averages/6-hour")
+    def six_hour_averages(node_id: str):
+        """Return four IST-day bucket averages, excluding missing/invalid values."""
+        ist = ZoneInfo("Asia/Kolkata")
+        date_text = request.args.get("date")
+        try:
+            local_day = datetime.strptime(date_text, "%Y-%m-%d").date() if date_text else utc_now().astimezone(ist).date()
+            if date_text and local_day.isoformat() != date_text:
+                raise ValueError
+        except ValueError:
+            return jsonify(error="date must use YYYY-MM-DD (IST) format"), 400
+
+        local_start = datetime.combine(local_day, datetime.min.time(), tzinfo=ist)
+        # Build day end by advancing one calendar day, including month/year boundaries.
+        from datetime import timedelta
+        local_end = local_start + timedelta(days=1)
+        database, error = db_or_error()
+        if error:
+            return error
+
+        def valid_value(field: str, value: Any) -> bool:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return False
+            if not (float("-inf") < float(value) < float("inf")):
+                return False
+            if field == "ph":
+                return 0 <= value <= 14
+            if field == "turbidity_ntu":
+                return value >= 0
+            if field == "temperature_c":
+                return -20 <= value <= 85
+            if field == "mq5_adc":
+                return 0 <= value <= 4095
+            if field == "mq5_digital":
+                return value in (0, 1)
+            if field.startswith("flow_lpm."):
+                return value >= 0
+            return False
+
+        fields = ("ph", "turbidity_ntu", "temperature_c", "mq5_adc", "mq5_digital")
+        slots = []
+        for slot_index in range(4):
+            start_local = local_start + timedelta(hours=slot_index * 6)
+            end_local = start_local + timedelta(hours=6)
+            slots.append({
+                "slot": slot_index + 1,
+                "start": start_local.isoformat(),
+                "end": end_local.isoformat(),
+            })
+
+        try:
+            cursor = database.readings.find({
+                "node_id": node_id,
+                "recorded_at": {"$gte": local_start.astimezone(timezone.utc), "$lt": local_end.astimezone(timezone.utc)},
+            }, {"recorded_at": 1, "measurements": 1})
+            records_by_slot: list[list[dict[str, Any]]] = [[] for _ in range(4)]
+            for record in cursor:
+                recorded_at = record.get("recorded_at")
+                if recorded_at is None:
+                    continue
+                if recorded_at.tzinfo is None:
+                    recorded_at = recorded_at.replace(tzinfo=timezone.utc)
+                local_hour = recorded_at.astimezone(ist).hour
+                records_by_slot[local_hour // 6].append(record)
+
+            output = []
+            for slot, records in zip(slots, records_by_slot):
+                sums: dict[str, float] = {}
+                counts: dict[str, int] = {}
+                excluded: dict[str, int] = {}
+                for field in fields:
+                    values = [record.get("measurements", {}).get(field) for record in records]
+                    accepted = [value for value in values if valid_value(field, value)]
+                    if accepted:
+                        sums[field] = round(sum(float(value) for value in accepted) / len(accepted), 4)
+                    else:
+                        sums[field] = None
+                    counts[field] = len(accepted)
+                    excluded[field] = len(values) - len(accepted)
+
+                flow_keys = sorted({
+                    key for record in records
+                    for key in (record.get("measurements", {}).get("flow_lpm", {}) or {})
+                })
+                flow_averages = {}
+                for key in flow_keys:
+                    values = [
+                        (record.get("measurements", {}).get("flow_lpm", {}) or {}).get(key)
+                        for record in records
+                    ]
+                    accepted = [value for value in values if valid_value(f"flow_lpm.{key}", value)]
+                    flow_averages[key] = {
+                        "average": round(sum(float(value) for value in accepted) / len(accepted), 4) if accepted else None,
+                        "valid_count": len(accepted),
+                        "excluded_count": len(values) - len(accepted),
+                    }
+                bucket_result = {
+                    "slot": slot["slot"], "start": slot["start"], "end": slot["end"],
+                    "reading_count": len(records), "averages": sums,
+                    "valid_counts": counts, "excluded_counts": excluded,
+                    "flow_lpm": flow_averages,
+                }
+                # Keep a refreshable materialized snapshot so the four daily buckets
+                # can be read later without recalculating the entire day.
+                database.six_hour_averages.update_one(
+                    {"node_id": node_id, "date": local_day.isoformat(), "slot": slot["slot"]},
+                    {"$set": {**bucket_result, "timezone": "Asia/Kolkata", "generated_at": utc_now()}},
+                    upsert=True,
+                )
+                output.append(bucket_result)
+            return jsonify(node_id=node_id, date=local_day.isoformat(), timezone="Asia/Kolkata", buckets=output,
+                           validity_rules={"ph": "0..14", "turbidity_ntu": ">=0", "temperature_c": "-20..85", "mq5_adc": "0..4095", "mq5_digital": "0 or 1", "flow_lpm": ">=0"})
+        except PyMongoError:
+            app.logger.exception("Failed to calculate six-hour averages")
+            return jsonify(error="failed to calculate six-hour averages"), 503
 
     @app.get("/api/v1/nodes/<node_id>/archives")
     def list_monthly_archives(node_id: str):

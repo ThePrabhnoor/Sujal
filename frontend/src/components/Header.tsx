@@ -46,6 +46,7 @@ export const Header: React.FC<HeaderProps> = ({
   const selectedNode = nodes.find(n => n.node_id === selectedNodeId) || nodes[0];
 
   const getClogBadgeColor = (val: number) => {
+    if (!Number.isFinite(val)) return 'text-slate-300 bg-slate-900/80 border-slate-700/80';
     if (val < 40) return 'text-emerald-300 bg-emerald-950/80 border-emerald-700/80';
     if (val < 75) return 'text-amber-300 bg-amber-950/80 border-amber-700/80';
     return 'text-rose-300 bg-rose-950/80 border-rose-700/80 animate-pulse';
@@ -64,7 +65,7 @@ export const Header: React.FC<HeaderProps> = ({
           >
             {nodes.map((n) => (
               <option key={n.node_id} value={n.node_id} className="bg-[#0c1633] text-white font-medium">
-                {n.node_id} — {n.name}
+                {n.node_id} — {n.name || n.node_id}
               </option>
             ))}
           </select>
@@ -84,7 +85,7 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Filter Clogged Metric Badge */}
         <div className={`hidden sm:flex items-center gap-2 px-3.5 py-1.5 rounded-xl border text-xs font-mono font-bold shadow-sm ${getClogBadgeColor(filterCloggedPercent)}`}>
           <Filter className="w-3.5 h-3.5" />
-          <span>Filter Clogged: {filterCloggedPercent}%</span>
+          <span>Filter Clogged: {Number.isFinite(filterCloggedPercent) ? `${filterCloggedPercent}%` : 'Not measured'}</span>
         </div>
       </div>
 

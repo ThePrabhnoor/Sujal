@@ -25,6 +25,7 @@ interface NavigationProps {
   onToggleStreaming: () => void;
   onRefreshReadings: () => void;
   isBackendConnected: boolean;
+  isNodeOnline?: boolean;
   activeBranch: string;
   lastIngestTimeFormatted: string;
   systemLogs: SystemLogEntry[];
@@ -38,6 +39,7 @@ export const Navigation: React.FC<NavigationProps> = ({
   onToggleStreaming,
   onRefreshReadings,
   isBackendConnected,
+  isNodeOnline = true,
   activeBranch,
   lastIngestTimeFormatted,
   systemLogs,
@@ -125,7 +127,13 @@ export const Navigation: React.FC<NavigationProps> = ({
             <Terminal className="w-3.5 h-3.5 text-cyan-400" />
             System Status
           </span>
-          <span className="text-[10px] text-slate-400 font-mono">v1.4 Live</span>
+          <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border ${
+            isNodeOnline
+              ? 'text-emerald-400 bg-emerald-950/60 border-emerald-800/60'
+              : 'text-rose-400 bg-rose-950/60 border-rose-800/60'
+          }`}>
+            {isNodeOnline ? 'v1.4 Live' : 'OFFLINE'}
+          </span>
         </div>
 
         {/* Integration Status Cards */}
@@ -133,14 +141,24 @@ export const Navigation: React.FC<NavigationProps> = ({
           {/* ESP32 Integration */}
           <div className="bg-[#111f3f] p-2.5 rounded-lg border border-[#203a68] flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <span className="relative flex h-2.5 w-2.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-400"></span>
-              </span>
+              {isNodeOnline ? (
+                <span className="relative flex h-2.5 w-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-400"></span>
+                </span>
+              ) : (
+                <span className="relative flex h-2.5 w-2.5">
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500"></span>
+                </span>
+              )}
               <span className="text-slate-200 text-[11px] font-sans font-semibold">ESP32 Telemetry</span>
             </div>
-            <span className="text-[10px] text-emerald-300 font-bold bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800">
-              INGESTING
+            <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+              isNodeOnline
+                ? 'text-emerald-300 bg-emerald-950/80 border-emerald-800'
+                : 'text-rose-300 bg-rose-950/80 border-rose-800'
+            }`}>
+              {isNodeOnline ? 'INGESTING' : 'OFFLINE'}
             </span>
           </div>
 
@@ -155,7 +173,7 @@ export const Navigation: React.FC<NavigationProps> = ({
                 ? 'text-emerald-300 bg-emerald-950/80 border-emerald-800'
                 : 'text-amber-300 bg-amber-950/80 border-amber-800'
             }`}>
-              {isBackendConnected ? 'ATLAS CONNECTED' : 'LOCAL ENGINE'}
+              {isBackendConnected ? 'ATLAS CONNECTED' : 'STATIC DEMO'}
             </span>
           </div>
 
@@ -165,8 +183,12 @@ export const Navigation: React.FC<NavigationProps> = ({
               <GitBranch className="w-3.5 h-3.5 text-cyan-400" />
               <span className="text-slate-200 text-[11px] font-sans font-semibold">Branch State</span>
             </div>
-            <span className="text-[10px] font-bold text-cyan-300 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-800">
-              {activeBranch ? `Branch ${activeBranch} Active` : 'Branch state not reported'}
+            <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+              isNodeOnline && activeBranch
+                ? 'text-cyan-300 bg-cyan-950/80 border-cyan-800'
+                : 'text-slate-400 bg-slate-900/80 border-slate-700'
+            }`}>
+              {isNodeOnline && activeBranch ? `Branch ${activeBranch} Active` : 'Branch state not reported'}
             </span>
           </div>
 
@@ -176,8 +198,12 @@ export const Navigation: React.FC<NavigationProps> = ({
               <Clock className="w-3.5 h-3.5 text-amber-400" />
               <span className="text-slate-300 text-[11px] font-sans">Last Ingest</span>
             </div>
-            <span className="text-[11px] font-bold text-amber-300 bg-amber-950/60 px-2 py-0.5 rounded border border-amber-800/80">
-              {lastIngestTimeFormatted}
+            <span className={`text-[11px] font-bold px-2 py-0.5 rounded border ${
+              isNodeOnline
+                ? 'text-amber-300 bg-amber-950/60 border-amber-800/80'
+                : 'text-slate-400 bg-slate-900/60 border-slate-700/80'
+            }`}>
+              {isNodeOnline ? lastIngestTimeFormatted : 'No Packets'}
             </span>
           </div>
         </div>
